@@ -19,13 +19,9 @@ __pycache__/
 .python-version
 
 # Large PDF files
-psx_bank_reports/
 
 # Processed data (can be regenerated)
-output_metadata/
-psx_bank_metadata/
-psx_markdown_clean/
-psx_bank_markdown/
+
 
 # System files
 .DS_Store
