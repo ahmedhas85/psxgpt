@@ -10,7 +10,10 @@ enhanced_contexts/
 enhanced_client_contexts/
 
 # Data processing scripts (not needed for deployment)
-
+psx_bank_markdown/
+psx_markdown_clean/
+psx_bank_metadata/
+output_metadata/
 
 # Python
 __pycache__/
