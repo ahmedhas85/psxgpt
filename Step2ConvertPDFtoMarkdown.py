@@ -15,15 +15,36 @@ if api_key:
 else:
     print("Failed to load API key.")
 
-# Set up parser with explicit markdown configuration
+# Set up parser with explicit markdown configuration and optimized settings
 parser = LlamaParse(
     result_type="markdown",
-    verbose=True
+    verbose=True,
+    # Enable OCR for image-based text (default is False, so we explicitly enable it)
+    disable_ocr=False,
+    # Language support for better OCR (add if needed, default is English)
+    # language="en", 
+    # Skip diagonal text which can cause parsing issues
+    skip_diagonal_text=True,
+    # Don't unroll columns (can help with complex layouts)
+    do_not_unroll_columns=False,
+    # Output tables as HTML for better complex table handling
+    output_tables_as_HTML=True,
+    # Hide repetitive headers and footers
+    hide_headers=True,
+    hide_footers=True,
+    # Preserve layout alignment across pages (useful for financial documents)
+    preserve_layout_alignment_across_pages=True,
+    # Extract images (might be useful for charts/figures in financial reports)
+    disable_image_extraction=False,
+    # Cache invalidation (useful for problematic files that might need re-processing)
+    invalidate_cache=True,
+    # Use bounding box to exclude potential header/footer noise (optional)
+    # bounding_box="0.05,0.05,0.05,0.05",  # Exclude 5% margin on all sides
 )
 
 # Define directories
-pdf_directory = '/Users/isfandiyarshaheen/psxChatGPT/psx_bank_reports'
-markdown_directory = '/Users/isfandiyarshaheen/psxChatGPT/psx_bank_markdown'
+pdf_directory = '/Users/isfandiyarshaheen/BankGPT/psx_bank_reports'
+markdown_directory = '/Users/isfandiyarshaheen/BankGPT/psx_bank_markdown'
 
 # Get list of already processed markdown files
 processed_files = {os.path.splitext(file)[0] for file in os.listdir(markdown_directory) if file.endswith('.md')}

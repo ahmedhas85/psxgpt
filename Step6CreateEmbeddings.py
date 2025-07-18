@@ -32,7 +32,7 @@ GEMINI_EMBEDDING_MODEL = "models/text-embedding-004"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # === Processing Parameters ===
-BATCH_SIZE = 150  # Number of nodes to process in one API call batch
+BATCH_SIZE = 300  # Number of nodes to process in one API call batch
 MAX_RETRIES = 5  # Max retries for API errors (e.g., rate limits)
 INITIAL_RETRY_DELAY = 60 # Seconds for first retry, doubles each time
 

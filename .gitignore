@@ -1,14 +1,49 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+# Environment variables
 .env
 
-# Virtual environments
-.venv
-
-#folders
+# Large index files (handled by GitHub Releases)
 gemini_index_metadata/
+
+# Runtime generated files
+enhanced_contexts/
+enhanced_client_contexts/
+
+# Data processing scripts (not needed for deployment)
+
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.python-version
+
+# Large PDF files
+psx_bank_reports/
+
+# Processed data (can be regenerated)
+output_metadata/
+psx_bank_metadata/
+psx_markdown_clean/
+psx_bank_markdown/
+
+# System files
+.DS_Store
+.DS_Store?
+._*
+
+# Chainlit runtime
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+\n# Secrets\n.env

@@ -1,6 +1,6 @@
 """
 PSX Financial Client - Enhanced Intelligence & Orchestration Layer
-Handles natural language parsing with Claude 3.5 Haiku and orchestrates MCP server calls.
+Handles natural language parsing with Claude 4 Sonnet and orchestrates MCP server calls.
 Enhanced with improved error handling, logging, and user experience.
 
 Flow: User Query → Claude Parsing → Query Execution → Response Synthesis
@@ -59,9 +59,16 @@ except Exception as e:
 # Anthropic client with enhanced configuration
 anthropic_client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, timeout=60.0)
 
-# Google GenAI for streaming responses (proven working configuration)
+# Google GenAI for streaming responses (uses maximum token limits by default)
 from llama_index.llms.google_genai import GoogleGenAI
-streaming_llm = GoogleGenAI(model="models/gemini-2.5-flash-preview-04-17", api_key=GEMINI_API_KEY, temperature=0.3)
+streaming_llm = GoogleGenAI(
+    model="models/gemini-2.5-pro", 
+    api_key=GEMINI_API_KEY, 
+    temperature=0.4,
+    timeout=120.0
+)
+
+# Google GenAI streaming LLM initialized
 
 # Import prompts library
 from prompts import prompts
@@ -122,7 +129,7 @@ def save_conversation_context(context: ConversationContext):
 # ─────────────────────────── Data Models ────────────────────────────────
 class QueryPlan(BaseModel):
     companies: List[str] = Field(description="Ticker symbols extracted")
-    intent: str = Field(description="Query intent: statement/analysis/comparison")
+    intent: str = Field(description="Query intent: statement/analysis")
     queries: List[Dict[str, Any]] = Field(description="Structured queries for MCP server")
     confidence: float = Field(description="Parsing confidence 0-1")
     needs_clarification: bool = Field(default=False)
@@ -130,7 +137,7 @@ class QueryPlan(BaseModel):
 
 # ─────────────────────────── Context & Source Management ─────────────────
 def format_sources(nodes: List[Dict], used_chunk_ids: Optional[List[str]] = None) -> str:
-    """Enhanced source formatting with filtering for actually used chunks"""
+    """Enhanced source formatting with filtering for actually used chunks, grouped by file"""
     if not nodes:
         return ""
     
@@ -153,37 +160,37 @@ def format_sources(nodes: List[Dict], used_chunk_ids: Optional[List[str]] = None
     if used_chunk_ids:
         sources += f"**Showing {len(nodes)} chunks actually used in the analysis** (filtered from original results)\n\n"
     
-    for i, node in enumerate(nodes, 1):
+    # Group nodes by source file
+    file_groups = {}
+    for node in nodes:
         try:
             metadata = node.get("metadata", {})
-            score = node.get("score", 0.0)
-            
-            # Extract key metadata
-            ticker = metadata.get("ticker", "Unknown")
-            filing_period = metadata.get("filing_period", "Unknown")
-            statement_type = metadata.get("statement_type", "Unknown")
-            scope = metadata.get("financial_statement_scope", "")
             source_file = metadata.get("source_file", "Unknown")
             chunk_number = metadata.get("chunk_number", "Unknown")
             
-            # Format period nicely
-            period_str = filing_period
-            if isinstance(filing_period, list) and filing_period:
-                period_str = filing_period[0] if len(filing_period) == 1 else f"{filing_period[0]} & {filing_period[1]}"
+            if source_file not in file_groups:
+                file_groups[source_file] = []
             
-            # Format statement type nicely  
-            statement_display = statement_type.replace("_", " ").title()
-            
-            # Add scope if available
-            scope_display = f" ({scope})" if scope and scope != "none" else ""
-            
-            # Include chunk number in the reference
-            sources += f"**[{i}]** {ticker} - {statement_display}{scope_display} - Chunk #{chunk_number} ({period_str})\n"
-            sources += f"   - **Relevance**: {score:.3f} | **Source**: {source_file}\n\n"
+            file_groups[source_file].append(chunk_number)
             
         except Exception as e:
-            log.warning(f"Error formatting source {i}: {e}")
-            sources += f"**[{i}]** Source formatting error\n\n"
+            log.warning(f"Error processing node for grouping: {e}")
+    
+    # Format grouped sources
+    for i, (source_file, chunk_numbers) in enumerate(file_groups.items(), 1):
+        # Sort chunk numbers numerically
+        try:
+            chunk_numbers = sorted(chunk_numbers, key=lambda x: int(x) if str(x).isdigit() else 0)
+        except:
+            pass  # Keep original order if sorting fails
+        
+        # Format chunk numbers list
+        if len(chunk_numbers) == 1:
+            chunks_str = f"chunk {chunk_numbers[0]}"
+        else:
+            chunks_str = f"chunks {', '.join(map(str, chunk_numbers))}"
+        
+        sources += f"**{i}.** File name: {source_file}; {chunks_str} used\n\n"
     
     return sources
 
@@ -244,7 +251,7 @@ async def save_client_context(query: str, query_plan: QueryPlan, result: Dict) -
                 "query_stats": result.get("query_stats", {}),
                 "error": result.get("error", None)
             },
-            "sample_nodes": result.get("nodes", [])[:3],  # Save first 3 nodes for debugging
+            "sample_nodes": result.get("nodes", [])[:3],
             "client_version": "enhanced"
         }
         
@@ -277,7 +284,7 @@ def find_best_ticker_match(query_ticker: str) -> str:
     return query_ticker
 
 async def parse_query_with_claude(user_query: str, conversation_context: Optional[ConversationContext] = None) -> QueryPlan:
-    """Use Claude 3.5 Haiku to parse user query into structured query plan with conversation context"""
+    """Use Claude 4 Sonnet to parse user query into structured query plan with conversation context"""
     log.info(f"Parsing query with Claude: {user_query[:100]}...")
     
     # Create ticker context for Claude - only banks
@@ -302,8 +309,8 @@ async def parse_query_with_claude(user_query: str, conversation_context: Optiona
 
     try:
         response = await anthropic_client.messages.create(
-            model="claude-3-5-haiku-20241022",
-            max_tokens=2000,
+            model="claude-4-sonnet-20250514",
+            max_tokens=30000,
             temperature=0.1,
             system=prompts.PARSING_SYSTEM_PROMPT,
             messages=messages,  # Use Claude's native message format
@@ -339,7 +346,7 @@ async def parse_query_with_claude(user_query: str, conversation_context: Optiona
                 for company in companies_for_annual:
                     for stmt_type in statement_types_for_annual:
                         annual_query = {
-                            "search_query": f"{company} {stmt_type.replace('_', ' ')} annual",  # Remove year constraint
+                            "search_query": f"{company} {stmt_type.replace('_', ' ')} annual",
                             "metadata_filters": {
                                 "ticker": company,
                                 "statement_type": stmt_type,
@@ -348,7 +355,6 @@ async def parse_query_with_claude(user_query: str, conversation_context: Optiona
                             }
                         }
                         annual_queries.append(annual_query)
-                        log.info(f"📊 Added annual query for Q4 calculation: {company} {stmt_type}")
                 
                 # Add annual queries to the plan
                 query_plan.queries.extend(annual_queries)
@@ -606,9 +612,7 @@ async def call_mcp_server(tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
 
 async def execute_financial_query(query_plan: QueryPlan, original_query: str) -> Dict[str, Any]:
     """Enhanced query execution with query refinement and improved error handling"""
-    log.info(f"🎯 Executing query plan: {len(query_plan.queries)} queries for intent '{query_plan.intent}'")
-    log.info(f"   Companies: {query_plan.companies}")
-    log.info(f"   Confidence: {query_plan.confidence:.2f}")
+    log.info(f"🎯 Executing {len(query_plan.queries)} queries for {query_plan.companies}")
     
     all_nodes = []
     successful_queries = 0
@@ -628,15 +632,14 @@ async def execute_financial_query(query_plan: QueryPlan, original_query: str) ->
                 current_search_query = query_spec.get("search_query", "").strip()
                 metadata_filters = query_spec.get("metadata_filters", {})
                 
-                # Enhanced query validation and logging
+                # Skip empty queries
                 if not current_search_query and not metadata_filters:
-                    log.warning(f"⚠️ Skipping query {i+1}: both search_query and metadata_filters are empty")
+                    log.warning(f"⚠️ Skipping empty query {i+1}")
                     failed_queries += 1
                     break
                 
                 # Query refinement strategies for subsequent attempts
                 if attempt_count > 1:
-                    original_query_terms = current_search_query
                     company_ticker = metadata_filters.get("ticker", "")
                     statement_type = metadata_filters.get("statement_type", "")
                     
@@ -644,7 +647,6 @@ async def execute_financial_query(query_plan: QueryPlan, original_query: str) ->
                         # Attempt 2: Simplify search query, focus on company and statement type
                         if company_ticker and statement_type:
                             current_search_query = f"{company_ticker} {statement_type.replace('_', ' ')}"
-                            log.info(f"🔄 Query {i+1} Attempt {attempt_count}: Simplified search to '{current_search_query}'")
                     elif attempt_count == 3:
                         # Attempt 3: Use broader search terms
                         if company_ticker:
@@ -652,15 +654,10 @@ async def execute_financial_query(query_plan: QueryPlan, original_query: str) ->
                             # Remove specific statement type filter to broaden search
                             if "statement_type" in metadata_filters:
                                 metadata_filters = {k: v for k, v in metadata_filters.items() if k != "statement_type"}
-                            log.info(f"🔄 Query {i+1} Attempt {attempt_count}: Broadened search to '{current_search_query}'")
                 
                 # If search_query is empty but we have metadata filters, use original query as fallback
                 if not current_search_query and metadata_filters:
                     current_search_query = original_query
-                    log.info(f"🔄 Using original query as fallback for query {i+1}: '{current_search_query}'")
-                
-                log.info(f"🔍 Executing query {i+1}/{len(query_plan.queries)} (attempt {attempt_count}): '{current_search_query[:60]}...'")
-                log.debug(f"   Metadata filters: {metadata_filters}")
                 
                 result = await call_mcp_server("psx_search_financial_data", {
                     "search_query": current_search_query,
@@ -668,11 +665,10 @@ async def execute_financial_query(query_plan: QueryPlan, original_query: str) ->
                     "top_k": query_spec.get("top_k", 10)
                 })
                 
-                # Enhanced error handling for server responses
+                # Error handling for server responses
                 if isinstance(result, dict) and "error" in result:
                     error_msg = result.get("error", "Unknown error")
                     error_type = result.get("error_type", "unknown")
-                    log.warning(f"⚠️ Query {i+1} attempt {attempt_count} returned {error_type}: {error_msg}")
                     
                     # Record the attempt
                     query_attempts.append({
@@ -695,7 +691,6 @@ async def execute_financial_query(query_plan: QueryPlan, original_query: str) ->
                         all_nodes.extend(nodes)
                         successful_queries += 1
                         query_successful = True
-                        log.info(f"✅ Query {i+1} attempt {attempt_count} successful: {len(nodes)} nodes retrieved, {len(relevant_nodes)} highly relevant")
                         
                         # Record successful attempt
                         query_attempts.append({
@@ -708,7 +703,6 @@ async def execute_financial_query(query_plan: QueryPlan, original_query: str) ->
                             "relevant_nodes": len(relevant_nodes)
                         })
                     else:
-                        log.warning(f"⚠️ Query {i+1} attempt {attempt_count} returned {len(nodes)} nodes but with low relevance scores")
                         query_attempts.append({
                             "query_index": i+1,
                             "attempt": attempt_count,
@@ -720,7 +714,6 @@ async def execute_financial_query(query_plan: QueryPlan, original_query: str) ->
                         })
                         continue
                 else:
-                    log.warning(f"⚠️ Query {i+1} attempt {attempt_count} returned no nodes")
                     query_attempts.append({
                         "query_index": i+1,
                         "attempt": attempt_count,
@@ -731,7 +724,7 @@ async def execute_financial_query(query_plan: QueryPlan, original_query: str) ->
                     continue
                 
             except Exception as e:
-                log.error(f"❌ Query {i+1} attempt {attempt_count} failed with exception: {e}")
+                log.error(f"❌ Query {i+1} attempt {attempt_count} failed: {e}")
                 query_attempts.append({
                     "query_index": i+1,
                     "attempt": attempt_count,
@@ -745,10 +738,9 @@ async def execute_financial_query(query_plan: QueryPlan, original_query: str) ->
         if not query_successful:
             failed_queries += 1
     
-    # Enhanced result summary and validation
+    # Result summary
     total_queries = len(query_plan.queries)
-    log.info(f"📊 Query execution summary: {successful_queries}/{total_queries} successful, {failed_queries} failed")
-    log.info(f"   Total query attempts: {len(query_attempts)}")
+    log.info(f"📊 Query execution: {successful_queries}/{total_queries} successful")
     
     if not all_nodes:
         error_msg = "No financial data found for your query"
@@ -757,7 +749,6 @@ async def execute_financial_query(query_plan: QueryPlan, original_query: str) ->
         elif failed_queries > 0:
             error_msg += f" - {failed_queries}/{total_queries} queries failed"
         
-        log.warning(f"❌ {error_msg}")
         return {
             "error": error_msg, 
             "nodes": [],
@@ -770,7 +761,7 @@ async def execute_financial_query(query_plan: QueryPlan, original_query: str) ->
             }
         }
     
-    # Return enhanced result with statistics
+    # Return result with statistics
     result_data = {
         "nodes": all_nodes,
         "intent": query_plan.intent,
@@ -787,26 +778,23 @@ async def execute_financial_query(query_plan: QueryPlan, original_query: str) ->
         }
     }
     
-    log.info(f"🎉 Query execution completed successfully: {len(all_nodes)} total nodes from {successful_queries} queries")
+    log.info(f"🎉 Found {len(all_nodes)} total nodes from {successful_queries} queries")
     return result_data
 
 async def stream_formatted_response(query: str, nodes: List[Dict], intent: str, companies: List[str]):
-    """Stream formatted response using centralized prompts library"""
+    """Stream formatted response using simplified prompts library"""
     if not nodes:
         yield "No relevant financial data found for your query."
         return
     
     # Analyze the nodes to detect multi-company scenario
     companies_set = set(companies)
-    statements = set()
     periods = set()
     has_annual_data = False
     has_quarterly_data = False
     
     for node in nodes:
         metadata = node.get("metadata", {})
-        if stmt := metadata.get("statement_type"):
-            statements.add(stmt)
         if period := metadata.get("filing_period"):
             # Handle filing_period which can be a list or string
             if isinstance(period, list):
@@ -825,35 +813,22 @@ async def stream_formatted_response(query: str, nodes: List[Dict], intent: str, 
     is_multi_company = len(companies_set) > 1
     user_query_lower = query.lower()
     is_quarterly_request = any(q_term in user_query_lower for q_term in ["quarterly", "quarter", "q1", "q2", "q3", "q4"])
-    is_quarterly_comparison = is_quarterly_request and any(["Q1" in str(p) or "Q2" in str(p) or "Q3" in str(p) or "Q4" in str(p) for p in periods])
-    is_side_by_side_request = any(phrase in user_query_lower for phrase in ["side by side", "side-by-side", "compare", "comparison table"])
+    is_quarterly_data = is_quarterly_request and any(["Q1" in str(p) or "Q2" in str(p) or "Q3" in str(p) or "Q4" in str(p) for p in periods])
     needs_q4_calculation = is_quarterly_request and has_annual_data and has_quarterly_data
     
     log.info(f"Response analysis: {len(companies_set)} companies, quarterly: {is_quarterly_request}, Q4_calc: {needs_q4_calculation}")
     
-    # Get appropriate prompt using the prompts library
+    # Get appropriate prompt using the simplified prompts library
     prompt = prompts.get_prompt_for_intent(
         intent=intent,
         query=query,
         companies=companies,
         is_multi_company=is_multi_company,
-        is_quarterly_comparison=is_quarterly_comparison,
-        is_side_by_side=is_side_by_side_request,
+        is_quarterly_comparison=is_quarterly_data,
         needs_q4_calculation=needs_q4_calculation
     )
     
-    # Add debug info about prompt selection
-    prompt_type = "unknown"
-    if is_multi_company and is_quarterly_request:
-        prompt_type = "multi-company-quarterly"
-    elif is_multi_company:
-        prompt_type = "multi-company-annual"
-    elif is_quarterly_request:
-        prompt_type = "single-company-quarterly"
-    else:
-        prompt_type = "single-company-annual"
-    
-    log.info(f"🎨 Using prompt type: {prompt_type} (intent: {intent}, multi: {is_multi_company}, quarterly: {is_quarterly_request})")
+    log.info(f"🎨 Using {intent} prompt for {len(companies_set)} companies")
     
     # Prepare context from nodes with chunk identification
     context_str = ""
@@ -861,11 +836,15 @@ async def stream_formatted_response(query: str, nodes: List[Dict], intent: str, 
         chunk_id = node.get("metadata", {}).get("chunk_number", f"chunk_{i+1}")
         context_str += f"\n\n--- Chunk #{chunk_id} ---\n{node.get('text', '')}"
     
-    full_prompt = f"{prompt}\n\nFinancial Data Context:\n{context_str}"
+    log.info(f"📊 Context prepared: {len(context_str)} characters from {len(nodes)} nodes")
+    
+    # Replace the [chunks] placeholder with actual context
+    full_prompt = prompt.replace("[chunks]", context_str)
     
     # Stream response using LLM directly
     try:
         stream = await streaming_llm.astream_complete(full_prompt)
+        
         async for chunk in stream:
             if chunk.delta:
                 yield chunk.delta
@@ -877,86 +856,29 @@ async def stream_formatted_response(query: str, nodes: List[Dict], intent: str, 
         yield str(response)
 
 # ─────────────────────────── Chainlit UI ────────────────────────────────
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+
 @cl.password_auth_callback
 def auth_callback(username: str, password: str) -> Optional[cl.User]:
-    if username == "asfi@psx.com" and password == "asfi123":
+    if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
         return cl.User(identifier=username, metadata={"role": "admin"})
     return None
 
 @cl.on_chat_start
-async def on_chat_start():
-    # Clear conversation context for new session
-    cl.user_session.set("conversation_context", None)
-    log.info("🔄 Started new chat session - cleared conversation context")
-    
-    welcome = """# 🏦 PSX Financial Assistant (Enhanced)
-
-**AI-Powered Financial Data Analysis for Pakistan Stock Exchange**
-
-## 🚀 **Enhanced Features:**
-- **Intelligent Query Parsing** with Claude 3.5 Haiku
-- **Multi-Query Execution** for comprehensive data retrieval
-- **Automated Q4 Calculation** from annual reports for quarterly analysis
-- **Enhanced Error Handling** with detailed diagnostics
-- **Real-time Processing Statistics** and success rates
-- **Improved Logging** for better debugging and monitoring
-- **🆕 Conversation Context** - Follow-up queries now understand previous context!
-
-## 🎯 **What you can ask:**
-
-**📊 Get Financial Statements:**
-- "Show me HBL's 2024 balance sheet"
-- "Get UBL quarterly profit and loss for Q2 2024"
-- "Make me a table showing quarterly financial statements for JS Bank and Meezan in 2024" ⭐
-
-**📈 Financial Analysis:**
-- "Analyze Meezan Bank's performance in 2024"
-- "What are the key trends in JS Bank's profitability?"
-
-**⚖️ Compare Companies:**
-- "Compare MCB and NBP balance sheets side by side"
-- "Show me Meezan Bank and Bank Al Falah's profit and loss account unconsolidated for 2024"
-
-**🆕 Follow-up Queries (NEW!):**
-- After analyzing companies: "Show me their sector exposure"
-- After financial statements: "What about their quarterly data?"
-- After comparisons: "I want to see exposure by sector and industry"
-
-## 🔢 **NEW: Intelligent Q4 Calculation**
-When you request quarterly data, the system automatically:
-- **Retrieves Q1, Q2, Q3** quarterly reports  
-- **Fetches annual reports** for the same companies
-- **Calculates Q4 = Annual - Q3** (since Q3 is 9-month cumulative data)
-- **Includes Q4 columns** in tables with calculation notes
-
-This solves the industry challenge where companies file annual reports but don't provide separate Q4 quarterly data!
-
-## 💬 **NEW: Conversation Context**
-The system now remembers your previous queries and can handle follow-up questions:
-- **Context Awareness**: Understands "their", "them", "these companies" references
-- **Smart Inference**: Automatically applies previous companies to new queries
-- **Consistency**: Maintains analysis scope across related queries
-- **Natural Flow**: Ask follow-up questions without repeating company names
-
-## 🔧 **System Improvements:**
-- **Enhanced error recovery** with multiple query attempts
-- **Detailed query statistics** showing success rates
-- **Better context saving** for debugging and analysis
-- **Improved logging** with processing time tracking
-- **Robust timeout handling** for reliable performance
-- **Conversation memory** for natural follow-up queries
-
-## ℹ️ **Technical Notes:**
-- Framework async warnings (if any) don't affect functionality
-- Context files are saved for both server and client debugging
-- All queries work despite any background warnings
-- Conversation context is automatically managed
-
-The system uses **Claude 3.5 Haiku** for intelligent query parsing and generates optimized database queries automatically with comprehensive error handling and conversation awareness.
-
-**What would you like to analyze today?**
-"""
-    await cl.Message(content=welcome).send()
+async def welcome_message():
+    await cl.Message(
+        content=(
+            "👋 **Welcome to BankGPT!**\n\n"
+            "To get started, first copy this URL: `https://bankgptserver.onrender.com/sse`\n\n"
+            "1. Click the plug icon 🔌 in the chatbox (MCP Servers)\n"
+            "2. Under **Type*** click the dropdown and select **sse**\n"
+            "3. Paste the URL above and set **Name** as **BankGPT**\n"
+            "4. Click **Confirm** to connect\n\n"
+            "5. Tickers included: ABL, BAFL, BAHL, BIPL, FABL, HBL, HMB, MCP, MEBL and UBL. \n\n"
+            "6. For best results, always specify ticker and time period (e.g. 2022, Q1-2024, last 6 quarters)\n\n"
+        )
+    ).send()
 
 @cl.on_message
 async def on_message(message: cl.Message):
@@ -967,42 +889,36 @@ async def on_message(message: cl.Message):
         
         # Load conversation context
         conversation_context = get_conversation_context()
-        log.info(f"💬 Loaded conversation context with {len(conversation_context.messages)} previous messages")
         
-        # Step 1: Parse query with Claude (enhanced logging)
+        # Step 1: Parse query with Claude
         step1 = cl.Message(content="🧠 **Step 1:** Analyzing your query...")
         await step1.send()
         
-        log.info("🔍 Starting Claude query parsing with conversation context...")
         query_plan = await parse_query_with_claude(message.content, conversation_context)
         
-        # Handle clarification needs with enhanced messaging
+        # Handle clarification needs
         if query_plan.needs_clarification:
             step1.content = "❓ **Step 1:** Need clarification..."
             await step1.update()
             
             clarification_msg = f"**I need more information:**\n\n{query_plan.clarification}"
-            log.info(f"🤔 Requesting clarification from user")
             await cl.Message(content=clarification_msg).send()
             return
         
-        # Enhanced step 1 completion message
+        # Step 1 completion message
         companies_str = f"{', '.join(query_plan.companies)}" if query_plan.companies else "general query"
         step1.content = f"✅ **Step 1:** Query parsed successfully"
         step1.content += f"\n   📊 **Intent:** {query_plan.intent} | **Companies:** {companies_str} | **Confidence:** {query_plan.confidence:.2f}"
         step1.content += f"\n   🔍 **Generated {len(query_plan.queries)} targeted queries**"
         await step1.update()
         
-        log.info(f"✅ Claude parsing completed: {len(query_plan.queries)} queries generated")
-        
-        # Step 2: Execute query plan (enhanced logging)
+        # Step 2: Execute query plan
         step2 = cl.Message(content="🔎 **Step 2:** Searching financial database...")
         await step2.send()
         
-        log.info("🔍 Starting query execution...")
         result = await execute_financial_query(query_plan, message.content)
         
-        # Enhanced error handling for step 2
+        # Error handling for step 2
         if "error" in result:
             step2.content = "❌ **Step 2:** Search completed with issues"
             await step2.update()
@@ -1022,11 +938,10 @@ async def on_message(message: cl.Message):
             error_msg += f"• Verify company ticker symbols (e.g., HBL, MCB, UBL)\n"
             error_msg += f"• Check if the requested period exists in our database"
             
-            log.warning(f"❌ Query execution failed: {result['error']}")
             await cl.Message(content=error_msg).send()
             return
         
-        # Enhanced step 2 completion message
+        # Step 2 completion message
         query_stats = result.get("query_stats", {})
         success_rate = query_stats.get("success_rate", 0) * 100
         
@@ -1035,9 +950,7 @@ async def on_message(message: cl.Message):
         step2.content += f"\n   📈 **Success rate:** {success_rate:.0f}% ({query_stats.get('successful_queries', 0)}/{query_stats.get('total_queries', 0)} queries)"
         await step2.update()
         
-        log.info(f"✅ Query execution completed: {result['total_nodes']} nodes from {query_stats.get('successful_queries', 0)} queries")
-        
-        # Step 3: Stream the analysis (enhanced logging)
+        # Step 3: Stream the analysis
         step3 = cl.Message(content="📊 **Step 3:** Generating financial analysis...")
         await step3.send()
         
@@ -1045,10 +958,9 @@ async def on_message(message: cl.Message):
         response_msg = cl.Message(content="")
         await response_msg.send()
         
-        log.info("🎨 Starting response generation and streaming...")
-        
-        # Stream the formatted response (proven working approach)
+        # Stream the formatted response (simple and reliable)
         complete_response = ""
+        
         async for chunk in stream_formatted_response(
             result["original_query"], 
             result["nodes"], 
@@ -1058,20 +970,18 @@ async def on_message(message: cl.Message):
             complete_response += chunk
             await response_msg.stream_token(chunk)
         
-        # Enhanced step 3 completion
+        # Step 3 completion
         processing_time = (datetime.now() - start_time).total_seconds()
         step3.content = f"✅ **Step 3:** Analysis generated successfully"
         step3.content += f"\n   ⏱️ **Total processing time:** {processing_time:.1f}s"
         await step3.update()
         
-        log.info(f"✅ Response streaming completed: {len(complete_response)} characters generated")
-        
-        # Add enhanced source info and completion summary
+        # Add source info and completion summary
         used_chunks = extract_used_chunks_from_response(complete_response)
         source_info = format_sources(result.get("nodes", []), used_chunks)
         await response_msg.stream_token(source_info)
         
-        # Enhanced completion summary with context file info
+        # Save context for debugging
         context_file = await save_client_context(message.content, query_plan, {
             **result,
             "response": complete_response
@@ -1094,9 +1004,6 @@ async def on_message(message: cl.Message):
         conversation_context.add_message("user", message.content)
         conversation_context.add_message("assistant", complete_response[:500] + "..." if len(complete_response) > 500 else complete_response)
         save_conversation_context(conversation_context)
-        log.info(f"💾 Saved conversation context with {len(conversation_context.messages)} messages")
-        
-        log.info(f"🎉 Message processing completed successfully in {processing_time:.1f}s")
         
     except Exception as e:
         log.error(f"❌ Error processing message: {e}")

@@ -5,9 +5,9 @@ from typing import List, Dict, Any, Optional, Tuple
 
 # --- Configuration: Define Input/Output Directories ---
 # PLEASE VERIFY THESE PATHS ARE CORRECT FOR YOUR SYSTEM
-MARKDOWN_DIR: str = '/Users/isfandiyarshaheen/psxChatGPT/psx_markdown_clean'
-METADATA_DIR: str = '/Users/isfandiyarshaheen/psxChatGPT/output_metadata'
-OUTPUT_DIR: str = '/Users/isfandiyarshaheen/psxChatGPT/psx_bank_metadata'
+MARKDOWN_DIR: str = 'psx_markdown_clean'
+METADATA_DIR: str = 'output_metadata'
+OUTPUT_DIR: str = 'psx_bank_metadata'
 # --- End Configuration ---
 
 # Define known bank tickers and their full names
@@ -24,7 +24,7 @@ BANK_MAPPING = {
     "AKBL": "Askari Bank Limited",
     "FABL": "Faysal Bank Limited",
     "JSBL": "JS Bank Limited",
-    "BISL": "Bank Islami Limited"
+    "BIPL": "Bank Islami Limited"
 }
 
 # Regex to find chunk header lines and capture the full header and the number
@@ -32,44 +32,25 @@ HEADER_REGEX = re.compile(r"^(##\s+Chunk\s+(\d+))", re.MULTILINE)
 
 def extract_ticker_from_filename(filename: str) -> Optional[str]:
     """
-    Extract bank ticker from filename by matching the bank name part.
+    Extract bank ticker from filename using the simple ticker-based convention.
+    Files are expected to be named like: ABL_Annual_2022_chunks.json or UBL_Quarterly_2024-06-30_chunks.json
     Args:
         filename (str): The filename to extract ticker from
     Returns:
         Optional[str]: The extracted ticker or None if not found
     """
-    # First try direct ticker match
-    for ticker in BANK_MAPPING.keys():
-        if ticker in filename:
-            return ticker
+    # For the new simple convention, the ticker is at the beginning of the filename
+    # Split by underscore and take the first part
+    parts = filename.split('_')
+    if len(parts) >= 2:
+        potential_ticker = parts[0].upper()
+        # Verify it's a known ticker
+        if potential_ticker in BANK_MAPPING:
+            return potential_ticker
     
-    # Get the bank name part (everything before Annual/Quarterly)
-    bank_part = filename.split('_Annual')[0].split('_Quarterly')[0].upper()
-    
-    # Create a simple mapping of bank name patterns to tickers
-    bank_patterns = {
-        'BANKISLAMI': 'BISL',
-        'BANK AL HABIB': 'BAHL',
-        'BANK_AL_HABIB': 'BAHL',
-        'ALLIED': 'ABL',
-        'BANK ALFALAH': 'BAFL',
-        'BANK_ALFALAH': 'BAFL',
-        'HABIB METROPOLITAN': 'HMB',
-        'HABIB_METROPOLITAN': 'HMB',
-        'ASKARI': 'AKBL',
-        'FAYSAL': 'FABL',
-        'JS': 'JSBL',
-        'MEEZAN': 'MEBL',
-        'UNITED': 'UBL',
-        'HABIB BANK': 'HBL',
-        'HABIB_BANK': 'HBL',
-        'MCB': 'MCB',
-        'NATIONAL': 'NBP'
-    }
-    
-    # Try to match any of the patterns
-    for pattern, ticker in bank_patterns.items():
-        if pattern in bank_part:
+    # Fallback: try to find any known ticker in the filename
+    for ticker in sorted(BANK_MAPPING.keys(), key=len, reverse=True):
+        if ticker in filename.upper():
             return ticker
             
     return None
@@ -133,6 +114,13 @@ def create_default_metadata(chunk_num: int, ticker: Optional[str] = None, filena
         filing_type, filing_periods = extract_filing_info(filename)
         metadata["filing_type"] = filing_type
         metadata["filing_period"] = filing_periods
+        
+        # Generate ticker-based filename
+        # Convert from metadata filename (e.g., "ABL_Annual_2022_chunks.json") to markdown filename
+        if filename.endswith('_chunks.json'):
+            base_filename = filename[:-len('_chunks.json')]
+            markdown_filename = base_filename + '_chunks.md'
+            metadata["file_name"] = markdown_filename
     
     return metadata
 # --- End Default Metadata ---
@@ -233,6 +221,11 @@ def combine_metadata_driven_by_json(metadata_dir: str, markdown_dir: str, output
                        item['entity_name'] = BANK_MAPPING[ticker]
                        item['filing_type'] = filing_type
                        item['filing_period'] = filing_periods
+                       
+                       # Update file_name to use ticker-based naming convention
+                       # The new file_name should match the current markdown filename
+                       item['file_name'] = markdown_filename
+                       
                        metadata_dict[item['chunk_number']] = item
                        valid_entries += 1
                    else:

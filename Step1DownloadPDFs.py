@@ -7,12 +7,16 @@ from datetime import datetime
 from playwright.sync_api import sync_playwright, Page, ElementHandle, Browser, BrowserContext, Download, Error as PlaywrightError
 
 # --- Configuration ---
-SEARCH_KEYWORD = "bank"
-TARGET_YEAR = 2024
+TARGET_TICKERS = ["ABL", "BAHL", "BAFL", "BIPL", "FABL", "HBL", "HMB", "MCB", "MEBL", "UBL"]
+TARGET_YEAR = 2025
 # --- Constants ---
-DOWNLOAD_DIR = f"psx_{SEARCH_KEYWORD}_reports"
+DOWNLOAD_DIR = f"psx_bank_reports"
 SCREENSHOTS_DIR = "screenshots"
 BASE_URL = "https://financials.psx.com.pk/"
+
+# --- Global Statistics ---
+FILES_SKIPPED = 0
+FILES_DOWNLOADED = 0
 
 # Modal Selectors (Keep from previous versions)
 MODAL_SELECTORS = [
@@ -52,6 +56,29 @@ def close_open_modal(page: Page):
                 # if modal.is_visible(): print("  WARN: Modal might still be visible.")
                 break
     except Exception as e: print(f"  Error closing modal: {e}")
+
+def check_file_exists(company_name: str, report_type: str, period_date: str) -> bool:
+    """Check if a file already exists based on the current naming convention."""
+    global FILES_SKIPPED
+    try:
+        clean_company_name = company_name.replace(' ', '_').replace('.', '').replace(',', '')
+        clean_period_date = period_date.replace(' ', '_').replace(',', '').replace('.', '')
+        
+        if period_date != "Unknown":
+            filename = f"{clean_company_name}_{report_type}_{clean_period_date}.pdf"
+        else:
+            # For unknown dates, we can't reliably check, so assume it doesn't exist
+            return False
+            
+        file_path = os.path.join(DOWNLOAD_DIR, filename)
+        exists = os.path.exists(file_path)
+        if exists:
+            print(f"    File already exists: {filename}")
+            FILES_SKIPPED += 1
+        return exists
+    except Exception as e:
+        print(f"    Error checking file existence: {e}")
+        return False
 
 # --- Core Logic Functions ---
 
@@ -106,6 +133,7 @@ def find_download_button_for_company(page: Page, company_element: ElementHandle)
 
 def download_report(page: Page, link: ElementHandle, company_name: str, report_type: str, period_date: str, download_index: int) -> bool:
     """Handles the download process for a single report link (mimics original)."""
+    global FILES_DOWNLOADED
     # This function seemed okay, but using filename logic from original
     try:
         link_text = link.inner_text().strip() or f"Link_{download_index}"
@@ -144,6 +172,7 @@ def download_report(page: Page, link: ElementHandle, company_name: str, report_t
         print(f"      Saving download to: {save_path}...")
         download.save_as(save_path)
         print(f"      Successfully downloaded: {save_path}")
+        FILES_DOWNLOADED += 1
         time.sleep(1); return True # Keep pause
 
     except Exception as download_e:
@@ -316,8 +345,13 @@ def handle_download_modal_mimic(page: Page, company_name: str, download_button: 
                     # print(f"    Skipping download for '{link_text}'.") # Less verbose
                     continue
 
-                # Download (using helper function)
+                # Check if file already exists before downloading
                 final_report_type = report_type if report_type != "Unknown" else "Report" # Ensure usable type
+                if check_file_exists(company_name, final_report_type, period_end_date):
+                    print(f"    Skipping download - file already exists for '{link_text}'")
+                    continue
+
+                # Download (using helper function)
                 if download_report(page, link, company_name, final_report_type, period_end_date, j + 1):
                     downloads_for_company += 1
 
@@ -366,6 +400,63 @@ def handle_download_modal_mimic(page: Page, company_name: str, download_button: 
     return downloads_for_company
 
 
+def process_companies_by_tickers(page: Page, tickers: list, target_year: int) -> int:
+    """Finds company elements by specific ticker symbols and processes downloads using MIMIC modal handler."""
+    print(f"\nLocating company rows for specific tickers: {', '.join(tickers)}...")
+    total_downloads_attempted = 0
+    companies_found_count = 0
+
+    for ticker in tickers:
+        print(f"\nSearching for ticker: {ticker}")
+        # Get all td elements and filter for exact ticker matches
+        all_td_elements = page.query_selector_all("td")
+        matching_elements = []
+        
+        for element in all_td_elements:
+            try:
+                element_text = element.inner_text().strip()
+                # Check for exact ticker match (whole word boundary)
+                if element_text == ticker:
+                    matching_elements.append(element)
+            except Exception as e:
+                continue
+        
+        if not matching_elements:
+            print(f"  No elements found for ticker '{ticker}'")
+            continue
+            
+        print(f"  Found {len(matching_elements)} elements for ticker '{ticker}'")
+        
+        for i, element in enumerate(matching_elements):
+            company_name = f"Element {i+1}"
+            try:
+                company_name = element.inner_text().strip()
+                # Double-check exact match
+                if company_name != ticker:
+                    continue
+                    
+                companies_found_count += 1
+                print(f"\n[{companies_found_count}] Processing ticker '{ticker}': '{company_name}'")
+                close_open_modal(page)
+                
+                download_button = find_download_button_for_company(page, element)
+                if not download_button:
+                    print(f"  No download button found for '{company_name}'.")
+                    continue
+                    
+                downloads_count = handle_download_modal_mimic(page, company_name, download_button, target_year)
+                total_downloads_attempted += downloads_count
+                
+            except Exception as loop_e:
+                print(f"ERROR processing company '{company_name}': {loop_e}")
+                take_screenshot(page, f"error_processing_{company_name.replace(' ', '_')}")
+                close_open_modal(page) # Attempt close on error
+                print("Attempting to continue...")
+
+    print(f"\nFinished processing {len(tickers)} tickers.")
+    return total_downloads_attempted
+
+
 def process_companies_by_keyword(page: Page, keyword: str, target_year: int) -> int:
     """Finds company elements by keyword and processes downloads using MIMIC modal handler."""
     # This function mainly orchestrates, keep structure but call mimic handler
@@ -411,10 +502,16 @@ def main():
     """Main script execution function."""
     start_time = time.time()
     print(f"--- Script started at {datetime.now()} ---")
-    print(f"--- Target Year: {TARGET_YEAR} | Keyword: '{SEARCH_KEYWORD}' ---")
+    print(f"--- Target Year: {TARGET_YEAR} | Tickers: {', '.join(TARGET_TICKERS)} ---")
     print("Setting up directories...")
     os.makedirs(DOWNLOAD_DIR, exist_ok=True); os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
     print(f"  Download dir: {os.path.abspath(DOWNLOAD_DIR)}")
+    
+    # Show existing files for target year
+    existing_files = [f for f in os.listdir(DOWNLOAD_DIR) if f.endswith('.pdf') and str(TARGET_YEAR) in f]
+    print(f"  Found {len(existing_files)} existing PDF files for {TARGET_YEAR}")
+    if existing_files:
+        print(f"  Existing files: {', '.join(existing_files[:5])}{'...' if len(existing_files) > 5 else ''}")
 
     browser = None; page = None; total_downloads = 0; script_success = False
 
@@ -433,7 +530,7 @@ def main():
 
         if table_loaded:
             close_open_modal(page) # Initial check
-            total_downloads = process_companies_by_keyword(page, SEARCH_KEYWORD, TARGET_YEAR) # Calls mimic handler
+            total_downloads = process_companies_by_tickers(page, TARGET_TICKERS, TARGET_YEAR) # Calls ticker-based handler
             script_success = True
         else: print("Table data did not load. Cannot process.")
 
@@ -446,11 +543,13 @@ def main():
         if browser: print("\nClosing browser..."); browser.close(); print("Browser closed.")
         duration = time.time() - start_time
         print("\n" + "="*20 + " SCRIPT SUMMARY " + "="*20)
-        # ... (Summary print remains the same) ...
         print(f"Script finished at {datetime.now()}")
-        print(f"Keyword: '{SEARCH_KEYWORD}' | Target Year: {TARGET_YEAR}")
+        print(f"Tickers: {', '.join(TARGET_TICKERS)} | Target Year: {TARGET_YEAR}")
         print(f"Total execution time: {duration:.2f} seconds")
-        if script_success: print(f"Total reports downloaded/attempted: {total_downloads}")
+        if script_success: 
+            print(f"Files downloaded: {FILES_DOWNLOADED}")
+            print(f"Files skipped (already exist): {FILES_SKIPPED}")
+            print(f"Total reports processed: {total_downloads}")
         else: print("Script finished prematurely.")
         print("="*56)
 

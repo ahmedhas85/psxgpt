@@ -5,15 +5,31 @@ import sys
 import time
 import re
 import math # For calculating number of batches
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # --- Configuration ---
 INPUT_DIR = "psx_markdown_clean"
 OUTPUT_DIR = "output_metadata"
-MODEL_NAME = "gemini-2.5-flash-preview-04-17" # 
+MODEL_NAME = "gemini-2.5-flash" # 
 # Set a delay between BATCH API calls (can likely be slightly longer than per-chunk delay)
-API_CALL_DELAY_SECONDS = 5 # Adjust based on API rate limits for larger requests
-CHUNK_BATCH_SIZE = 75
+API_CALL_DELAY_SECONDS = 2 # Increased delay to be more conservative
+CHUNK_BATCH_SIZE = 25  # Further reduced to avoid API response limits and JSON truncation
+# Number of files to process in parallel (adjust based on API rate limits)
+# Rate limit guidance:
+# - Free Tier (10 RPM): MAX_PARALLEL_FILES = 1-2
+# - Tier 1 (1,000 RPM): MAX_PARALLEL_FILES = 5-10  
+# - Tier 2+ (2,000+ RPM): MAX_PARALLEL_FILES = 10-20
+# Monitor for 429 errors and reduce if needed
+MAX_PARALLEL_FILES = 10  # Conservative starting point - increase based on your tier
 
+# Thread-safe printing
+print_lock = threading.Lock()
+
+def thread_safe_print(*args, **kwargs):
+    """Thread-safe printing function"""
+    with print_lock:
+        print(*args, **kwargs)
 
 # --- Function to split markdown into chunks (using reliable regex) ---
 def split_into_chunks(markdown_content):
@@ -88,9 +104,8 @@ Metadata Requirements for EACH relevant financial chunk identified within the ba
 6.  `is_note`: "yes" or "no". Does the chunk primarily represent a note *to* the financial statements? Look for headings like "Notes to the Financial Statements", "Notes to and forming part of...", or numbered note structures (e.g., "Note 1", "Note 2.1", "Note 3 SIGNIFICANT ACCOUNTING POLICIES").
 7.  `note_link`: If `is_note` is "yes", try to determine if the note primarily relates to one of the main statement types ("profit_and_loss", "balance_sheet", "cash_flow", "changes_in_equity", "comprehensive_income") based on context or explicit references within the note. If it's a general note (like accounting policies) or the link isn't clear, use "none".
 8.  `auditor_report`: "yes" or "no". Does the chunk contain the Independent Auditor's Report? Look for titles like "Independent Auditor's Report", "Report of Independent Registered Public Accounting Firm". Content typically addresses shareholders, mentions auditing standards (ISA, PCAOB, etc.), includes basis for opinion, and expresses an opinion ("In our opinion, the financial statements present fairly..."). Usually signed by an external audit firm (e.g., KPMG, PwC, Deloitte, EY) and appears *before* the main financial statements.
-9.  `director_report`: "yes" or "no". Does the chunk contain the Directors' Report or Chairman's Statement? Look for titles like "Directors’ Report", "Report of the Directors", "Chairman's Review/Statement". Content often discusses overall performance, strategy, economic outlook, acknowledges stakeholders, may present financial highlights *summarized* from the main statements. Usually signed by the Chairman or CEO/President on behalf of the board and appears *before* the main financial statements and often before the Auditor's Report.
+9.  `director_report`: "yes" or "no". Does the chunk contain the Directors' Report or Chairman's Statement? Look for titles like "Directors' Report", "Report of the Directors", "Chairman's Review/Statement". Content often discusses overall performance, strategy, economic outlook, acknowledges stakeholders, may present financial highlights *summarized* from the main statements. Usually signed by the Chairman or CEO/President on behalf of the board and appears *before* the main financial statements and often before the Auditor's Report.
 10. `annual_report_discussion`: "yes" or "no". Does the chunk contain Management Discussion & Analysis (MD&A), financial review, economic snapshot, or similar narrative financial analysis, typically appearing *before* the main statements but distinct from the formal Auditor's or Directors' reports?
-11. `file_name`: Set this to "{filename}".
 
 Output Format:
 Provide the output ONLY as a single JSON array. Each object in the array represents ONE chunk from the input batch that was identified as having `financial_data: "yes"`.
@@ -109,8 +124,7 @@ Example JSON Output Structure (for a batch analysis):
     "note_link": "none",
     "auditor_report": "no",
     "director_report": "yes",
-    "annual_report_discussion": "no", // Assuming chunk 6 is primarily the formal Director's Report
-    "file_name": "{filename}"
+    "annual_report_discussion": "no" // Assuming chunk 6 is primarily the formal Director's Report
   }},
   {{ // Example: Unconsolidated Balance Sheet
     "chunk_number": 18,
@@ -122,8 +136,7 @@ Example JSON Output Structure (for a batch analysis):
     "note_link": "none",
     "auditor_report": "no",
     "director_report": "no",
-    "annual_report_discussion": "no",
-    "file_name": "{filename}"
+    "annual_report_discussion": "no"
   }},
  {{ // Example: Note related to Consolidated Profit and Loss Account
     "chunk_number": 145,
@@ -135,8 +148,7 @@ Example JSON Output Structure (for a batch analysis):
     "note_link": "profit_and_loss",
     "auditor_report": "no",
     "director_report": "no",
-    "annual_report_discussion": "no",
-    "file_name": "{filename}"
+    "annual_report_discussion": "no"
   }}
   // ... potentially more objects if other chunks in the batch had relevant financial data
 ]
@@ -152,7 +164,7 @@ def process_file_in_batches(filepath, model, output_dir, batch_size, API_CALL_DE
 
     # This print statement is inside the function in your original code
     # It will only be called for files that are actually being processed now.
-    print(f"Processing '{filename}'...")
+    thread_safe_print(f"Processing '{filename}'...")
     all_batch_results = []
     batch_errors = 0
 
@@ -161,7 +173,7 @@ def process_file_in_batches(filepath, model, output_dir, batch_size, API_CALL_DE
             markdown_content = f.read()
 
         if not markdown_content.strip():
-            print(f"  Skipping empty file content: {filename}") # Message clarification
+            thread_safe_print(f"  Skipping empty file content: {filename}") # Message clarification
             with open(output_filepath, 'w', encoding='utf-8') as outfile:
                 json.dump([], outfile, indent=2)
             return 0, 0
@@ -169,29 +181,29 @@ def process_file_in_batches(filepath, model, output_dir, batch_size, API_CALL_DE
         # 1. Split into Chunks
         chunks = split_into_chunks(markdown_content)
         if not chunks:
-             print(f"  No '## Chunk X' headers found in {filename}. Outputting empty JSON.")
+             thread_safe_print(f"  No '## Chunk X' headers found in {filename}. Outputting empty JSON.")
              with open(output_filepath, 'w', encoding='utf-8') as outfile:
                  json.dump([], outfile, indent=2)
              return 0, 0
 
-        print(f"  Split into {len(chunks)} chunks.")
+        thread_safe_print(f"  Split into {len(chunks)} chunks.")
 
         # 2. Create Batches
         chunk_batches = batch_chunks(chunks, batch_size)
         num_batches = len(chunk_batches)
-        print(f"  Grouped into {num_batches} batches of up to {batch_size} chunks.")
+        thread_safe_print(f"  Grouped into {num_batches} batches of up to {batch_size} chunks.")
 
         # 3. Process each Batch
         for i, batch in enumerate(chunk_batches):
             batch_num = i + 1
             if not batch:
                 continue
-            print(f"    Analyzing Batch {batch_num}/{num_batches} (Chunks {batch[0]['number']}-{batch[-1]['number']})...")
+            thread_safe_print(f"    Analyzing Batch {batch_num}/{num_batches} (Chunks {batch[0]['number']}-{batch[-1]['number']})...")
 
             try:
                 prompt = build_batch_prompt(batch, filename)
                 if i > 0:
-                     print(f"      Waiting {API_CALL_DELAY_SECONDS}s before next batch call...")
+                     thread_safe_print(f"      Waiting {API_CALL_DELAY_SECONDS}s before next batch call...")
                      time.sleep(API_CALL_DELAY_SECONDS)
                 response = model.generate_content(
                     prompt,
@@ -202,44 +214,43 @@ def process_file_in_batches(filepath, model, output_dir, batch_size, API_CALL_DE
                 try:
                     cleaned_response_text = response.text.strip().lstrip('```json').rstrip('```').strip()
                     if not cleaned_response_text:
-                        print(f"    Warning: Received empty response text for Batch {batch_num}. Assuming no financial data in batch.")
+                        thread_safe_print(f"    Warning: Received empty response text for Batch {batch_num}. Assuming no financial data in batch.")
                         continue
                     batch_metadata = json.loads(cleaned_response_text)
                     if not isinstance(batch_metadata, list):
-                        print(f"    Error: Gemini response for Batch {batch_num} was not a JSON list. Got: {type(batch_metadata)}. Skipping batch results.")
-                        print(f"    Problematic Response Text:\n---\n{cleaned_response_text}\n---")
+                        thread_safe_print(f"    Error: Gemini response for Batch {batch_num} was not a JSON list. Got: {type(batch_metadata)}. Skipping batch results.")
+                        thread_safe_print(f"    Problematic Response Text:\n---\n{cleaned_response_text}\n---")
                         batch_errors += 1
                         continue
                     valid_items = []
                     for item in batch_metadata:
                         if isinstance(item, dict) and 'chunk_number' in item and item.get('financial_data') == 'yes':
-                             if 'file_name' not in item: item['file_name'] = filename
                              valid_items.append(item)
                         else:
-                            print(f"    Warning: Invalid item structure or financial_data!='yes' in Batch {batch_num}, skipping item: {item}")
+                            thread_safe_print(f"    Warning: Invalid item structure or financial_data!='yes' in Batch {batch_num}, skipping item: {item}")
                     if valid_items:
-                         print(f"      -> Found {len(valid_items)} financial chunk(s) in this batch.")
+                         thread_safe_print(f"      -> Found {len(valid_items)} financial chunk(s) in this batch.")
                          all_batch_results.extend(valid_items)
                     elif batch_metadata:
-                         print(f"      -> No valid financial chunks identified in this batch after validation.")
+                         thread_safe_print(f"      -> No valid financial chunks identified in this batch after validation.")
                     else:
-                         print(f"      -> No financial chunks identified in this batch.")
+                         thread_safe_print(f"      -> No financial chunks identified in this batch.")
                 except json.JSONDecodeError as json_err:
-                    print(f"    Error: Failed to decode JSON response for Batch {batch_num}. Error: {json_err}. Skipping batch results.")
-                    print(f"    Problematic Response Text:\n---\n{cleaned_response_text}\n---")
+                    thread_safe_print(f"    Error: Failed to decode JSON response for Batch {batch_num}. Error: {json_err}. Skipping batch results.")
+                    thread_safe_print(f"    Problematic Response Text:\n---\n{cleaned_response_text}\n---")
                     batch_errors += 1
                 except Exception as parse_err:
-                    print(f"    Error: Unexpected error parsing response for Batch {batch_num}. Error: {parse_err}. Skipping batch results.")
-                    print(f"    Problematic Response Text:\n---\n{cleaned_response_text}\n---")
+                    thread_safe_print(f"    Error: Unexpected error parsing response for Batch {batch_num}. Error: {parse_err}. Skipping batch results.")
+                    thread_safe_print(f"    Problematic Response Text:\n---\n{cleaned_response_text}\n---")
                     batch_errors += 1
             except genai.types.BlockedPromptException as blocked_err:
-                 print(f"    Error: Prompt blocked for Batch {batch_num}. Reason: {blocked_err}. Skipping batch results.")
+                 thread_safe_print(f"    Error: Prompt blocked for Batch {batch_num}. Reason: {blocked_err}. Skipping batch results.")
                  batch_errors += 1
             except genai.types.StopCandidateException as stop_err:
-                  print(f"    Error: Generation stopped unexpectedly for Batch {batch_num}. Reason: {stop_err}. Skipping batch results.")
+                  thread_safe_print(f"    Error: Generation stopped unexpectedly for Batch {batch_num}. Reason: {stop_err}. Skipping batch results.")
                   batch_errors += 1
             except Exception as api_err:
-                print(f"    Error during API call for Batch {batch_num}: {api_err}. Skipping batch results.")
+                thread_safe_print(f"    Error during API call for Batch {batch_num}: {api_err}. Skipping batch results.")
                 batch_errors += 1
 
         # 4. Sort results by chunk number before writing
@@ -249,33 +260,69 @@ def process_file_in_batches(filepath, model, output_dir, batch_size, API_CALL_DE
         with open(output_filepath, 'w', encoding='utf-8') as outfile:
             json.dump(all_batch_results, outfile, indent=2)
 
-        print(f"  Finished processing '{filename}'. Found {len(all_batch_results)} total financial chunks.")
+        thread_safe_print(f"  Finished processing '{filename}'. Found {len(all_batch_results)} total financial chunks.")
         if batch_errors > 0:
-             print(f"  NOTE: There were errors processing {batch_errors} batch(es) in this file. Results from those batches might be missing or incomplete.")
+             thread_safe_print(f"  NOTE: There were errors processing {batch_errors} batch(es) in this file. Results from those batches might be missing or incomplete.")
 
         return len(all_batch_results), batch_errors
 
     except FileNotFoundError:
-        print(f"  Error: Input file not found: {filepath}")
+        thread_safe_print(f"  Error: Input file not found: {filepath}")
         return 0, 0
     except Exception as e:
-        print(f"  FATAL Error processing file {filename} (outside batch loop): {e}")
+        thread_safe_print(f"  FATAL Error processing file {filename} (outside batch loop): {e}")
         error_info = [{"error": f"Failed to process file entirely: {str(e)}", "file_name": filename}]
         try:
             with open(output_filepath, 'w', encoding='utf-8') as outfile:
                 json.dump(error_info, outfile, indent=2)
         except Exception as write_err:
-            print(f"  Additionally, failed to write error file {output_filename}: {write_err}")
+            thread_safe_print(f"  Additionally, failed to write error file {output_filename}: {write_err}")
         return 0, 1
+
+# --- Parallel Processing Wrapper ---
+def process_single_file(filepath, api_key, file_index, total_files):
+    """
+    Wrapper function to process a single file in parallel.
+    Each thread gets its own model instance to avoid conflicts.
+    """
+    try:
+        # Initialize model for this thread
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(MODEL_NAME)
+        
+        filename = os.path.basename(filepath)
+        
+        # Thread-safe progress indicator
+        thread_safe_print(f"\n[{file_index}/{total_files}] Processing '{filename}' (Thread: {threading.current_thread().name})")
+        
+        # Call the main processing function
+        num_chunks, num_errors = process_file_in_batches(filepath, model, OUTPUT_DIR, CHUNK_BATCH_SIZE, API_CALL_DELAY_SECONDS)
+        
+        return {
+            'filename': filename,
+            'success': True,
+            'num_chunks': num_chunks,
+            'num_errors': num_errors
+        }
+        
+    except Exception as e:
+        thread_safe_print(f"  Unhandled FATAL Error processing {filename}: {e}")
+        return {
+            'filename': filename,
+            'success': False,
+            'error': str(e),
+            'num_chunks': 0,
+            'num_errors': 0
+        }
 
 # --- Main Execution ---
 if __name__ == "__main__":
     start_time = time.time()
 
     # --- API Key Configuration ---
-    api_key = os.getenv("GOOGLE_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        print("Error: GOOGLE_API_KEY environment variable not set.")
+        print("Error: GEMINI_API_KEY environment variable not set.")
         sys.exit(1)
 
     try:
@@ -343,39 +390,46 @@ if __name__ == "__main__":
         print("\nNo new files need processing.")
         sys.exit(0) # Exit if there's nothing to do
 
-    print("\n--- Starting Processing ---")
+    print(f"\n--- Starting Parallel Processing (Max {MAX_PARALLEL_FILES} files at once) ---")
     # --- MODIFICATION END ---
 
-
-    # --- Process Files (Now iterates only through files_to_process) ---
+    # --- Process Files in Parallel ---
     processed_files_count = 0
-    total_financial_chunks_in_processed = 0 # Reset count for newly processed files
-    # total_batch_errors = 0 # Original code didn't track this
-
-    # Loop only through the files identified as needing processing
-    for index, filename in enumerate(files_to_process):
-        filepath = os.path.join(INPUT_DIR, filename)
-
-        # Clearer progress indicator for files actually being processed
-        print(f"\n[{index + 1}/{len(files_to_process)}] Now Processing '{filename}'...")
-
-        # The os.path.exists check is removed from here as it's done upfront
-
-        # --- Original Processing Logic ---
-        try:
-             # Call the processing function
-             num_chunks, num_errors = process_file_in_batches(filepath, model, OUTPUT_DIR, CHUNK_BATCH_SIZE, API_CALL_DELAY_SECONDS)
-
-             # Increment counts based on successful execution (no fatal exception)
-             # Note: num_errors > 0 indicates batch errors within the file, but the file itself was attempted.
-             processed_files_count += 1
-             total_financial_chunks_in_processed += num_chunks # Add chunks found in this file
-             # if num_errors > 0: total_batch_errors += num_errors # Optionally track batch errors
-
-        except Exception as e:
-             # Catch unexpected errors during the call to process_file_in_batches itself
-             print(f"  Unhandled FATAL Error during processing loop for {filename}: {e}")
-             # Do not increment processed_files_count if this happens
+    total_financial_chunks_in_processed = 0
+    
+    if files_to_process:
+        # Create file paths with indices for progress tracking
+        file_tasks = []
+        for index, filename in enumerate(files_to_process):
+            filepath = os.path.join(INPUT_DIR, filename)
+            file_tasks.append((filepath, api_key, index + 1, len(files_to_process)))
+        
+        # Process files in parallel using ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=MAX_PARALLEL_FILES) as executor:
+            # Submit all tasks
+            future_to_filepath = {
+                executor.submit(process_single_file, filepath, api_key, file_index, total_files): filepath
+                for filepath, api_key, file_index, total_files in file_tasks
+            }
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_filepath):
+                filepath = future_to_filepath[future]
+                try:
+                    result = future.result()
+                    if result['success']:
+                        processed_files_count += 1
+                        total_financial_chunks_in_processed += result['num_chunks']
+                        thread_safe_print(f"✓ Completed: {result['filename']} - Found {result['num_chunks']} financial chunks")
+                        if result['num_errors'] > 0:
+                            thread_safe_print(f"  ⚠️ Had {result['num_errors']} batch errors")
+                    else:
+                        thread_safe_print(f"✗ Failed: {result['filename']} - {result['error']}")
+                except Exception as exc:
+                    filename = os.path.basename(filepath)
+                    thread_safe_print(f"✗ Exception for {filename}: {exc}")
+    else:
+        print("No files to process.")
 
 
     # --- Final Summary ---

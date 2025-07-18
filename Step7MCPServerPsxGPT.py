@@ -14,6 +14,8 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 import hashlib
 import time
+import requests
+import tarfile
 
 from dotenv import load_dotenv
 from llama_index.core import StorageContext, load_index_from_storage
@@ -21,7 +23,7 @@ from llama_index.core.vector_stores import MetadataFilter, MetadataFilters
 from llama_index.core.schema import NodeWithScore, TextNode
 from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from llama_index.llms.google_genai import GoogleGenAI
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 # ─────────────────────────── Configuration ──────────────────────────────
 load_dotenv()
@@ -55,11 +57,14 @@ class EnhancedResourceManager:
             log.info("✅ Embedding model loaded successfully")
             
             log.info("🤖 Loading Google Gemini LLM (2.5 Flash)...")
-            self.llm = GoogleGenAI(model="models/gemini-2.5-flash-preview-04-17", api_key=GEMINI_API_KEY, temperature=0.3)
+            self.llm = GoogleGenAI(model="models/gemini-2.5-flash", api_key=GEMINI_API_KEY, temperature=0.3)
             log.info("✅ LLM loaded successfully")
             
             log.info("🗂️ Loading vector index from storage...")
             log.info(f"   Index directory: {INDEX_DIR}")
+            
+            # Download index if not present
+            await download_index_if_needed()
             
             if not INDEX_DIR.exists():
                 raise FileNotFoundError(f"Index directory not found: {INDEX_DIR}")
@@ -102,6 +107,33 @@ try:
 except Exception as e:
     log.error(f"❌ Failed to load tickers: {e}")
     TICKERS = []
+
+# ─────────────────────────── Index Download Function ────────────────────
+async def download_index_if_needed():
+    """Download index from GitHub Releases if not present"""
+    if INDEX_DIR.exists() and (INDEX_DIR / "default__vector_store.json").exists():
+        log.info("✅ Index already available locally")
+        return True
+    
+    try:
+        url = os.getenv("INDEX_RELEASE_URL")
+        if not url:
+            log.error("❌ INDEX_RELEASE_URL not set")
+            return False
+            
+        log.info("📥 Downloading index from GitHub Releases...")
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+        
+        with tarfile.open(fileobj=response.raw, mode='r|gz') as tar:
+            tar.extractall(BASE_DIR)
+        
+        log.info("✅ Index download complete")
+        return True
+        
+    except Exception as e:
+        log.error(f"❌ Index download failed: {e}")
+        return False
 
 # ─────────────────────────── Enhanced Core Functions ────────────────────
 def save_context(query: str, nodes: List[NodeWithScore], metadata: Dict) -> str:
@@ -253,42 +285,32 @@ async def search_financial_data(search_query: str, metadata_filters: Dict[str, A
         }
 
 # ─────────────────────────── MCP Server Setup ───────────────────────────
+
+# Initialize resources at module level for persistence
+async def initialize_resources_once():
+    """Initialize resources once at startup, not per connection"""
+    if not resource_manager._initialized:
+        log.info("🚀 Starting PSX Financial MCP Server...")
+        try:
+            await resource_manager.initialize()
+            log.info("✅ Server initialization completed successfully")
+        except Exception as e:
+            log.error(f"❌ Server initialization failed: {e}")
+
+# Simple lifespan manager that doesn't reinitialize resources
 @asynccontextmanager
 async def app_lifespan(mcp_server: FastMCP):
-    """Enhanced application lifecycle management with proper async cleanup"""
-    log.info("🚀 Starting PSX Financial MCP Server...")
+    """Simplified lifecycle management - resources stay persistent"""
+    # Initialize resources once if not already done
+    await initialize_resources_once()
     
-    # Initialize resources
     try:
-        await resource_manager.initialize()
-        log.info("✅ Server initialization completed successfully")
-    except Exception as e:
-        log.error(f"❌ Server initialization failed: {e}")
-        # Continue startup but with degraded functionality
-        
-    try:
-        yield  # Server is running
+        yield  # Server is running - resources stay alive
     except Exception as e:
         log.error(f"❌ Server runtime error: {e}")
     finally:
-        # Enhanced cleanup
-        try:
-            log.info("🛑 Starting PSX Financial MCP Server shutdown...")
-            
-            # Allow some time for pending operations to complete
-            await asyncio.sleep(0.1)
-            
-            # Clear resource manager state
-            resource_manager._initialized = False
-            resource_manager.embed_model = None
-            resource_manager.llm = None
-            resource_manager.index = None
-            
-            log.info("✅ PSX Financial MCP Server shutdown completed")
-            
-        except Exception as cleanup_error:
-            log.warning(f"⚠️ Cleanup warning during shutdown: {cleanup_error}")
-            # Don't raise during cleanup to prevent masking original errors
+        # Minimal cleanup - don't clear resources during normal operation
+        log.info("🔄 Connection lifecycle complete - resources remain active")
 
 mcp = FastMCP(name="psx-financial-server-enhanced", lifespan=app_lifespan)
 
@@ -397,4 +419,10 @@ async def psx_health_check() -> Dict[str, Any]:
 # ─────────────────────────── Entry Point ────────────────────────────────
 if __name__ == "__main__":
     log.info("🚀 Starting Enhanced PSX Financial MCP Server...")
-    mcp.run() 
+    
+    # Get port from Render environment
+    port = int(os.getenv("PORT", 8000))
+    
+    # Use SSE transport for browser/HTTP compatibility
+    # Bind to all interfaces for Render
+    mcp.run(transport="sse", host="0.0.0.0", port=port) 

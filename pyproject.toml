@@ -1,9 +1,9 @@
 [project]
-name = "psxchatgpt"
+name = "bankgpt"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "playwright",
     "llama-cloud-services",
@@ -13,10 +13,17 @@ dependencies = [
     "llama_index.llms.gemini",
     "llama_index.embeddings.google_genai",
     "llama_index.llms.google_genai",
+    "llama_index.vector_stores.postgres",
     "python-dotenv",
     "mcp[cli,core]>=1.6.0",
     "chainlit",
     "anthropic",
     "asyncpg",
-    "rapidfuzz",
+    "browser-use>=0.4.0",
+    "mistralai",
+    "supabase",
+    "fastmcp>=2.10.1",
+    "psycopg2-binary",
+    "sqlalchemy",
+    "dspy-ai>=2.6.0",
 ]
