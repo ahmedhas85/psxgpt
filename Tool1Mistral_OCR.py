@@ -8,6 +8,10 @@ import os
 import json
 import time
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Install required packages if not already installed
 try:
@@ -18,8 +22,11 @@ except ImportError:
     from mistralai import Mistral
 
 def setup_mistral_client():
-    """Initialize Mistral client with API key."""
-    api_key = "a6aMOrhdUY3ucwl1ZNBKl9D5BG3EFpTa"
+    """Initialize Mistral client with API key from environment variables."""
+    api_key = os.getenv("MISTRAL_API_KEY")
+    if not api_key:
+        raise ValueError("MISTRAL_API_KEY environment variable is not set. Please add it to your .env file.")
+    
     client = Mistral(api_key=api_key)
     print("✅ Mistral client initialized successfully")
     return client

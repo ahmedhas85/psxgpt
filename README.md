@@ -34,7 +34,6 @@ Check out our comprehensive walkthrough and demo video on YouTube:
 - Google Gemini API key
 - LlamaParse API key (for Step 2 PDF processing - [get a free key here](https://docs.cloud.llamaindex.ai/llamacloud/getting_started/api_key))
 - Anthropic API key (for Claude 3.5 Sonnet integration)
-- Literal API key (for Chainlit web interface - [get a free key here](https://cloud.getliteral.ai/))
 - Claude Desktop (optional, for MCP integration)
 
 ### API Keys and Alternatives
@@ -63,7 +62,6 @@ The embeddings and LLM functionality require a Google Gemini API key, which you 
    # Create a .env file with your API keys
    echo "GEMINI_API_KEY=your_gemini_api_key_here" > .env
    echo "ANTHROPIC_API_KEY=your_anthropic_api_key_here" >> .env
-   echo "LITERAL_API_KEY=your_literal_api_key_here" >> .env
    
    # Create and activate a virtual environment
    uv venv
@@ -145,22 +143,32 @@ The current authentication is implemented in `Step8MCPClientPsxGPT.py` and can b
 
 ## 🗂️ Project Structure
 
-- `Step1DownloadPDFs.py`: Downloads financial reports from PSX website
+### Core Pipeline Scripts
+- `Step1DownloadPDFsSearch.py`: Downloads financial reports by keyword search (default: "bank")
+- `Step1DownloadPDFsTickers.py`: Downloads reports for specific tickers (configurable list)
 - `Step2ConvertPDFtoMarkdown.py`: Converts downloaded PDFs into markdown format
 - `Step3ChunkMarkdown.py`: Chunks the markdown files into smaller pieces
 - `Step4MetaDataTags.py`: Extracts metadata tags from the chunks
 - `Step5CombineMetaData.py`: Combines metadata from different sources
-- `Step6CreateEmbeddings.py`: Creates vector embeddings for the chunks using Google Gemini
-- `Step7MCPServerPsxGPT.py`: Runs an MCP server for Claude Desktop integration
-- `Step8MCPClientPsxGPT.py`: Runs a Chainlit web interface with Claude 3.5 Sonnet integration
-- `tickers.json`: Maps company tickers to full names
-- `pyproject.toml`: Project metadata and dependencies for `uv`
-- `.env`: File to store your API keys (Gemini, Anthropic, and Literal)
+- `Step6CreateEmbeddings.py`: Creates vector embeddings using Google Gemini
+- `Step7MCPServerPsxGPT.py`: MCP server for Claude Desktop integration
+- `Step8MCPClientPsxGPT.py`: Chainlit web interface with Claude 3.5 Sonnet
+
+### Utility & Validation Tools
+- `Tool1Mistral_OCR.py`: Experimental OCR comparison tool (Mistral vs LlamaParse)
+- `Tool2ValidateProcessing.py`: Data validation and quality assurance tool
+
+### Configuration & Database
+- `tickers.json`: Company ticker to name mappings
+- `chainlit_schema_psx.sql`: PostgreSQL schema for conversation persistence
+- `chainlitdb.py`: Database connection utilities
+- `pyproject.toml`: Project dependencies and metadata
+- `.env`: File to store your API keys (Gemini and Anthropic)
 - `.gitignore`: Specifies intentionally untracked files that Git should ignore
 
 **Note:** The `gemini_index_metadata/` directory containing the vector index is generated locally by `Step6CreateEmbeddings.py` and is not included in the GitHub repository due to its size.
 
-## 📦 Dependencies
+## Dependencies
 
 | Package                              | Purpose                                    |
 |--------------------------------------|--------------------------------------------|
@@ -171,13 +179,74 @@ The current authentication is implemented in `Step8MCPClientPsxGPT.py` and can b
 | llama_index.llms.gemini              | Google's Gemini LLM integration           |
 | llama_index.embeddings.google_genai  | Google's embedding models integration      |
 | llama_index.llms.google_genai        | Google's Gemini LLM integration (specific) |
+| llama_index.vector_stores.postgres   | PostgreSQL vector store for embeddings     |
 | python-dotenv                        | Environment variable management            |
-| pymupdf                              | Core PDF handling library (used by Step 2) |
 | mcp                                  | Model Context Protocol for AI integration  |
 | chainlit                             | Modern web interface for LLM applications  |
 | anthropic                            | Claude API client for Python              |
+| asyncpg                              | Async PostgreSQL driver                    |
+| browser-use                          | Browser automation utilities               |
+| mistralai                            | Mistral AI API client (for OCR comparison) |
+| supabase                             | Supabase client for database operations    |
+| fastmcp                              | Enhanced MCP functionality                 |
+| psycopg2-binary                      | PostgreSQL adapter for Python             |
+| sqlalchemy                           | SQL toolkit and ORM                       |
+| dspy-ai                              | DSPy framework for LLM programming        |
 
 *(Install using `uv sync` which reads `pyproject.toml`)*
+
+## 📥 Download Configuration
+
+Choose your download method based on your needs:
+
+### Option 1: Keyword-based Download
+```bash
+python Step1DownloadPDFsSearch.py
+```
+Downloads all companies matching the keyword "bank" (configurable in the script)
+
+### Option 2: Ticker-based Download
+```bash
+python Step1DownloadPDFsTickers.py
+```
+Downloads specific companies: ABL, BAHL, BAFL, BIPL, FABL, HBL, HMB, MCB, MEBL, UBL
+
+**Configuration:**
+- Modify the `TARGET_TICKERS` list in `Step1DownloadPDFsTickers.py` to customize companies
+- Change `SEARCH_KEYWORD` in `Step1DownloadPDFsSearch.py` to target different sectors
+- Adjust `TARGET_YEAR` in either script to download different years
+
+## 🔍 Data Validation & Quality Assurance
+
+After processing your financial reports, validate the data quality using:
+
+```bash
+python Tool2ValidateProcessing.py
+```
+
+This tool will:
+- Verify chunk numbering consistency
+- Validate JSON metadata structure
+- Check for missing financial statements
+- Analyze statement types and scopes (consolidated vs unconsolidated)
+- Generate a comprehensive validation report
+
+## 🔄 Alternative PDF Processing
+
+### Mistral OCR (Experimental)
+For comparison with LlamaParse, you can test Mistral's OCR capabilities:
+
+```bash
+python Tool1Mistral_OCR.py
+```
+
+**Features:**
+- Compares OCR quality between Mistral and LlamaParse
+- Processes multiple PDF files
+- Generates detailed performance statistics
+- Saves results for analysis
+
+**Note:** This requires a Mistral API key and is primarily for performance comparison.
 
 ## 🌎 Using Claude Desktop with psxGPT MCP Server
 
@@ -259,11 +328,11 @@ The Chainlit-based MCP client provides a modern web interface that connects dire
 
 1. Ensure you have the required API keys:
    - Anthropic API key: Sign up at [anthropic.com](https://www.anthropic.com/) and get an API key
-   - Literal API key: Sign up at [cloud.getliteral.ai](https://cloud.getliteral.ai/) and get an API key
+
    - Add both to your `.env` file:
      ```
      ANTHROPIC_API_KEY=your_anthropic_key_here
-     LITERAL_API_KEY=your_literal_key_here
+
      ```
 
 2. Start the MCP server in one terminal:
