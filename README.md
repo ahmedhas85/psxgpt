@@ -1,478 +1,213 @@
-# psxGPT 📊
+# psxGPT
 
-A ChatGPT-like application for Pakistan Stock Exchange (PSX) financial data.
+A ChatGPT-like application for Pakistan Stock Exchange (PSX) financial data, which can be repurposed for any financial data including querying a data room during acquisition due diligence.
 
-## 🔍 Overview
+## What psxGPT Does
 
-psxGPT is a multi-step data processing pipeline and Retrieval-Augmented Generation (RAG) application. It automatically downloads financial reports from the Pakistan Stock Exchange (PSX) website, converts them to markdown, chunks them, extracts metadata, and creates vector embeddings using Google Gemini.
+psxGPT allows financial analysts to query and analyze financial data using plain English. For example:
 
-The application consists of two main components:
-1. An MCP (Model Context Protocol) server that enables integration with Claude Desktop
-2. A dedicated Chainlit-based MCP client that provides a web interface specifically optimized for Claude 3.5 Sonnet, offering a seamless financial analysis experience with enhanced tool usage capabilities
+*"Get me Deposits per branch for HBL, UBL and MEBL in 2024"*
 
-## 📺 Live Demo
+psxGPT will find the necessary information and compile a report using ONLY data found in financial reports.
 
-Check out our comprehensive walkthrough and demo video on YouTube:
-[![psxGPT Live Demo](https://img.youtube.com/vi/3kLG2_B_WYQ/0.jpg)](https://www.youtube.com/watch?v=3kLG2_B_WYQ&t=327s)
+**Use Cases:**
+- Financial statement analysis and comparison
+- Due diligence data room queries
+- Regulatory filing research
+- Querying Economic Survey of Pakistan or SBP Annual Report
 
-## ✨ Features
+## How It Works
 
-- 📥 Automatic download of financial reports from PSX website
-- 📄 PDF processing and chunking with intelligent financial statement detection
-- 🧠 Vector embeddings for efficient retrieval
-- 💬 Natural language interface for querying financial data
-- 📝 Spreadsheet-ready output format
-- 🔌 MCP server for Claude Desktop integration
-- 🌐 Chainlit web interface with Claude 3.5 Sonnet integration
+psxGPT processes financial documents through a 6-step pipeline:
 
-## 🚀 Quick Start
+1. **Download PDFs** (`Step1DownloadPDFsSearch.py` or `Step1DownloadPDFsTickers.py`)
+2. **Convert to Markdown** (`Step2ConvertPDFtoMarkdown.py`) - Uses LlamaParse or `Tool1Mistral_OCR.py` for scanned documents
+3. **Create Chunks** (`Step3ChunkMarkdown.py`) - Splits into searchable segments
+4. **Extract Metadata** (`Step4MetaDataTags.py`) - Identifies companies, dates, report types
+5. **Combine Data** (`Step5CombineMetaData.py`) - Consolidates all metadata
+6. **Build Search Index** (`Step6CreateEmbeddings.py`) - Creates vector embeddings for AI search
+
+**Quality Assurance:** Use `Tool2ValidateProcessing.py` to verify data quality after processing.
+
+The web interface (`Step8MCPClientPsxGPT.py`) connects to the backend server (`Step7MCPServerPsxGPT.py`) to answer user queries.
+
+## Quick Start
 
 ### Prerequisites
 
-- Python 3.10.16 or higher
-- uv package manager
-- Google Gemini API key
-- LlamaParse API key (for Step 2 PDF processing - [get a free key here](https://docs.cloud.llamaindex.ai/llamacloud/getting_started/api_key))
-- Anthropic API key (for Claude 3.5 Sonnet integration)
-- Claude Desktop (optional, for MCP integration)
-
-### API Keys and Alternatives
-
-#### LlamaParse for PDF Processing
-For Step 2 (`Step2ConvertPDFtoMarkdown.py`), you'll need a LlamaParse API key from LlamaCloud. The free tier allows processing up to 3,000 pages, which should be sufficient for initial testing. You can obtain a free API key by following the instructions [here](https://docs.cloud.llamaindex.ai/llamacloud/getting_started/api_key).
-
-If you need to process more pages or prefer not to use LlamaParse, you can modify the code to use alternative open-source PDF parsers such as:
-- [PyMuPDF4LLM](https://github.com/pymupdf/PyMuPDF-Utilities/tree/master/pymupdf4llm)
-- [Marker](https://github.com/VikParuchuri/marker)
-- [Unstructured](https://github.com/Unstructured-IO/unstructured)
-
-#### Google Gemini API
-The embeddings and LLM functionality require a Google Gemini API key, which you can obtain from [Google AI Studio](https://ai.google.dev/).
-
-### Installation
-
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/ishaheen10/psxgpt.git
-   cd psxgpt
-   ```
-
-2. Set up your environment:
-   ```bash
-   # Create a .env file with your API keys
-   echo "GEMINI_API_KEY=your_gemini_api_key_here" > .env
-   echo "ANTHROPIC_API_KEY=your_anthropic_api_key_here" >> .env
-   
-   # Create and activate a virtual environment
-   uv venv
-   
-   # Activate the virtual environment
-   # For Windows:
-   .venv\Scripts\activate
-   # For Mac/Linux:
-   source .venv/bin/activate
-   
-   # Install dependencies
-   uv sync
-   ```
-
-3. Set up PostgreSQL database (for conversation persistence):
-   ```bash
-   # Create a new PostgreSQL database
-   createdb chainlit_psx
-   
-   # Apply the database schema
-   psql -d chainlit_psx -f chainlit_schema_psx.sql
-   
-   # Add database URL to your .env file
-   echo "DATABASE_URL=postgresql://your_username@localhost:5432/chainlit_psx" >> .env
-   echo "DATABASE_DIRECT_URL=postgresql://your_username@localhost:5432/chainlit_psx" >> .env
-   ```
-   
-   **Note:** Replace `your_username` with your PostgreSQL username. If you don't have PostgreSQL installed, you can:
-   - Install via Homebrew (Mac): `brew install postgresql`
-   - Install via package manager (Linux): `sudo apt-get install postgresql`
-   - Download from [postgresql.org](https://www.postgresql.org/download/) (Windows)
-
-4. Get your Google Gemini API key:
-   - Go to [Google AI Studio](https://ai.google.dev/)
-   - Sign in with your Google account
-   - Navigate to the API keys section
-   - Create a new API key
-   - Copy the key and add it to your `.env` file
-
-5. Generate the vector index:
-   ```bash
-   # Use 'python' on Windows, 'python3' on Mac/Linux
-   python Step6CreateEmbeddings.py
-   ```
-
-6. Run the application (choose one):
-   ```bash
-   # Option 1: MCP server for Claude Desktop integration
-   python Step7MCPServerPsxGPT.py
-   
-   # Option 2: Chainlit web interface with Claude 3.5 Sonnet
-   python Step8MCPClientPsxGPT.py
-   ```
-
-7. Access the web interface:
-   - For Chainlit: Open your browser at http://localhost:8000
-
-## 🔐 Default Authentication (Sample Code)
-
-**Important:** This is sample/demo code with hardcoded authentication credentials for testing purposes.
-
-**Default Login Credentials:**
-- **Username:** `asfi@psx.com`
-- **Password:** `asfi123`
-
-These credentials are hardcoded in the application for demonstration purposes. In a production environment, you should:
-1. Replace the hardcoded authentication with a proper user management system
-2. Use environment variables or a secure database for storing user credentials
-3. Implement proper password hashing and security measures
-4. Set up role-based access control as needed
-
-The current authentication is implemented in `Step8MCPClientPsxGPT.py` and can be modified according to your security requirements.
-
-## 💡 Example Queries
-
-- "Show me the profit and loss statement for HBL in Q1 2024"
-- "What was UBL's total assets in March 2024?"
-- "Compare the net profit of MCB and MEBL for Q1 2024"
-
-## 🗂️ Project Structure
-
-### Core Pipeline Scripts
-- `Step1DownloadPDFsSearch.py`: Downloads financial reports by keyword search (default: "bank")
-- `Step1DownloadPDFsTickers.py`: Downloads reports for specific tickers (configurable list)
-- `Step2ConvertPDFtoMarkdown.py`: Converts downloaded PDFs into markdown format
-- `Step3ChunkMarkdown.py`: Chunks the markdown files into smaller pieces
-- `Step4MetaDataTags.py`: Extracts metadata tags from the chunks
-- `Step5CombineMetaData.py`: Combines metadata from different sources
-- `Step6CreateEmbeddings.py`: Creates vector embeddings using Google Gemini
-- `Step7MCPServerPsxGPT.py`: MCP server for Claude Desktop integration
-- `Step8MCPClientPsxGPT.py`: Chainlit web interface with Claude 3.5 Sonnet
-
-### Utility & Validation Tools
-- `Tool1Mistral_OCR.py`: Experimental OCR comparison tool (Mistral vs LlamaParse)
-- `Tool2ValidateProcessing.py`: Data validation and quality assurance tool
-
-### Configuration & Database
-- `tickers.json`: Company ticker to name mappings
-- `chainlit_schema_psx.sql`: PostgreSQL schema for conversation persistence
-- `chainlitdb.py`: Database connection utilities
-- `pyproject.toml`: Project dependencies and metadata
-- `.env`: File to store your API keys (Gemini and Anthropic)
-- `.gitignore`: Specifies intentionally untracked files that Git should ignore
-
-**Note:** The `gemini_index_metadata/` directory containing the vector index is generated locally by `Step6CreateEmbeddings.py` and is not included in the GitHub repository due to its size.
-
-## Dependencies
-
-| Package                              | Purpose                                    |
-|--------------------------------------|--------------------------------------------|
-| playwright                           | Browser automation for downloading PDFs    |
-| llama-cloud-services                 | LlamaIndex cloud service integration       |
-| llama-index-core                     | Core RAG functionality                     |
-| llama-index-readers-file             | File reading capabilities for LlamaIndex   |
-| llama_index.llms.gemini              | Google's Gemini LLM integration           |
-| llama_index.embeddings.google_genai  | Google's embedding models integration      |
-| llama_index.llms.google_genai        | Google's Gemini LLM integration (specific) |
-| llama_index.vector_stores.postgres   | PostgreSQL vector store for embeddings     |
-| python-dotenv                        | Environment variable management            |
-| mcp                                  | Model Context Protocol for AI integration  |
-| chainlit                             | Modern web interface for LLM applications  |
-| anthropic                            | Claude API client for Python              |
-| asyncpg                              | Async PostgreSQL driver                    |
-| browser-use                          | Browser automation utilities               |
-| mistralai                            | Mistral AI API client (for OCR comparison) |
-| supabase                             | Supabase client for database operations    |
-| fastmcp                              | Enhanced MCP functionality                 |
-| psycopg2-binary                      | PostgreSQL adapter for Python             |
-| sqlalchemy                           | SQL toolkit and ORM                       |
-| dspy-ai                              | DSPy framework for LLM programming        |
-
-*(Install using `uv sync` which reads `pyproject.toml`)*
-
-## 📥 Download Configuration
-
-Choose your download method based on your needs:
-
-### Option 1: Keyword-based Download
-```bash
-python Step1DownloadPDFsSearch.py
-```
-Downloads all companies matching the keyword "bank" (configurable in the script)
-
-### Option 2: Ticker-based Download
-```bash
-python Step1DownloadPDFsTickers.py
-```
-Downloads specific companies: ABL, BAHL, BAFL, BIPL, FABL, HBL, HMB, MCB, MEBL, UBL
-
-**Configuration:**
-- Modify the `TARGET_TICKERS` list in `Step1DownloadPDFsTickers.py` to customize companies
-- Change `SEARCH_KEYWORD` in `Step1DownloadPDFsSearch.py` to target different sectors
-- Adjust `TARGET_YEAR` in either script to download different years
-
-## 🔍 Data Validation & Quality Assurance
-
-After processing your financial reports, validate the data quality using:
-
-```bash
-python Tool2ValidateProcessing.py
-```
-
-This tool will:
-- Verify chunk numbering consistency
-- Validate JSON metadata structure
-- Check for missing financial statements
-- Analyze statement types and scopes (consolidated vs unconsolidated)
-- Generate a comprehensive validation report
-
-## 🔄 Alternative PDF Processing
-
-### Mistral OCR (Experimental)
-For comparison with LlamaParse, you can test Mistral's OCR capabilities:
-
-```bash
-python Tool1Mistral_OCR.py
-```
-
-**Features:**
-- Compares OCR quality between Mistral and LlamaParse
-- Processes multiple PDF files
-- Generates detailed performance statistics
-- Saves results for analysis
-
-**Note:** This requires a Mistral API key and is primarily for performance comparison.
-
-## 🌎 Using Claude Desktop with psxGPT MCP Server
-
-The MCP server provides a seamless integration with Claude Desktop, allowing you to query PSX financial data directly within the Claude interface. What makes this integration powerful is that Claude intelligently uses the MCP tools to gather relevant context for your questions, breaking down complex queries into logical steps for data retrieval and analysis.
-
-### Setting up Claude Desktop with psxGPT
-
-1. Install Claude Desktop from [anthropic.com/claude/download](https://www.anthropic.com/claude/download)
-
-2. Run the MCP server:
-   ```bash
-   python Step7MCPServerPsxGPT.py
-   ```
-
-3. Configure Claude Desktop:
-   - Open Claude Desktop
-   - Click on Settings (gear icon)
-   - Navigate to "Developer" section
-   - Click "Edit config" and add the following to your config file:
-
-   ```json
-   {
-     "mcpServers": {
-       "PSX Financial Statements Server": {
-         "command": "python",
-         "args": [
-           "/path/to/your/psxChatGPT/Step7MCPServerPsxGPT.py"
-         ],
-         "env": {
-           "GEMINI_API_KEY": "your_gemini_api_key_here"
-         }
-       }
-     }
-   }
-   ```
-   - Replace `/path/to/your/psxChatGPT` with the actual path to your project
-   - Replace `your_gemini_api_key_here` with your actual Gemini API key
-   - Save the config file and restart Claude Desktop
-
-4. Once connected, you can ask Claude questions about PSX financial data, and it will use the MCP server to retrieve and analyze information.
-
-### Example interactions with Claude Desktop
-
-#### Basic Queries:
-- "Find the unconsolidated profit and loss statement for Meezan Bank in 2023"
-- "What were the total assets of HBL in their 2022 consolidated balance sheet?"
-- "Compare the profit margins of MCB and UBL for 2023"
-
-#### Advanced Analysis Queries:
-- "Write an investment memo to Warren Buffet on Pakistan's banking sector with a focus on Meezan Bank and MCB"
-- "Analyze the financial health of Pakistan's top 3 banks based on their Q1 2024 statements"
-- "What are the key risk factors in HBL's financial statements over the past two years?"
-- "Compare Islamic banks vs conventional banks in Pakistan based on their profitability and asset quality"
-- "Draft a one-page summary of UBL's performance in 2023 compared to its industry peers"
-
-### How It Works
-
-The MCP architecture allows Claude to:
-
-1. **Understand your query**: Claude parses your request to identify which companies, time periods, and financial statements are needed
-2. **Gather relevant context**: Claude automatically calls the appropriate MCP tools to find and retrieve the most relevant financial data
-3. **Analyze the information**: Using its reasoning capabilities, Claude synthesizes the data into coherent, insightful responses
-4. **Present findings**: Claude formats the response according to your needs (text analysis, tables, or comparisons)
-
-This integrated approach means you can ask increasingly sophisticated questions without needing to understand the underlying data structure or retrieval process.
-
-### Important notes about Claude Desktop integration
-
-- **Subscription Requirement**: Due to the context-heavy nature of financial statements, you will likely need a Claude paid subscription (Claude Pro or higher) to gather sufficient context for complex queries.
-- **Alternative MCP Clients**: Any MCP-compatible client can connect to the psxGPT server, but Claude Desktop provides the easiest setup experience.
-- **Server Restart**: You may need to restart the MCP server occasionally if you encounter connection issues or after system sleep/hibernation.
-- **Complex Analysis**: For detailed financial analysis, the more specific your question, the better the results. Claude will progressively gather context for multi-step analyses.
-
-## 💻 Using the Chainlit Web Interface with Claude 3.5 Sonnet
-
-The Chainlit-based MCP client provides a modern web interface that connects directly to Claude 3.5 Sonnet and the PSX MCP server, offering a seamless financial analysis experience in your browser.
-
-### Setting up the Chainlit Client
-
-1. Ensure you have the required API keys:
-   - Anthropic API key: Sign up at [anthropic.com](https://www.anthropic.com/) and get an API key
-
-   - Add both to your `.env` file:
-     ```
-     ANTHROPIC_API_KEY=your_anthropic_key_here
-
-     ```
-
-2. Start the MCP server in one terminal:
-   ```bash
-   python Step8MCPServerPsxGPT.py
-   ```
-
-3. Start the Chainlit client in another terminal:
-   ```bash
-   python Step9MCPClientPsxGPT.py
-   ```
-
-4. Open your browser at http://localhost:8000
-
-5. Log in with the default credentials:
-   - Username: asfi@psx.com
-   - Password: asfi123
-
-### Key Features of the Chainlit Interface
-
-- **Web-Based Access**: No need to install Claude Desktop - access the full capabilities through your browser
-- **Optimized Prompting**: The client includes carefully crafted system prompts that ensure Claude properly formats queries to the MCP server
-- **Persistent Chat History**: Your conversations are saved and can be resumed later
-- **Enhanced Tool Usage**: The implementation ensures proper handling of the filing_period parameter to get accurate financial data
-- **Structured Financial Data**: Results are presented in a clean, readable format with proper formatting of tables and financial figures
-
-### Example Queries for the Chainlit Interface
-
-The Chainlit interface supports the same types of queries as the Claude Desktop integration, with the added benefit of being accessible through a web browser:
-
-- "Show me HBL's 2023 consolidated balance sheet"
-- "What was the profit after tax for MCB in 2024?"
-- "Compare the ROE of UBL and ABL for 2023"
-- "Analyze the liquidity ratios of Meezan Bank from 2022 to 2024"
-
-## 🧹‍♂️ Detailed Setup Guide for Beginners
-
-### Step 1: Install Python
+- Python 3.11 or higher
+- PostgreSQL database
+- API Keys:
+  - [Google Gemini](https://ai.google.dev/) - for embeddings and AI analysis
+  - [LlamaParse](https://docs.cloud.llamaindex.ai/llamacloud/getting_started/api_key) - for PDF processing (free tier: 3,000 pages)
+  - [Anthropic](https://www.anthropic.com/) - for Claude AI integration
+  - [Mistral](https://console.mistral.ai/) - for scanned document OCR
+
+### Step 1: Install Code Editor (IDE)
+
+Choose one of these beginner-friendly code editors:
+- **[Windsurf](https://www.windsurf.io/)** (Recommended - AI-powered coding assistant)
+- **[Cursor](https://cursor.sh/)** (AI-powered VS Code alternative)
+- **[VS Code](https://code.visualstudio.com/)** (Popular free editor)
+
+Download and install your chosen editor following the installer instructions.
+
+### Step 2: Install Python
 
 **For Windows Users:**
-1. Visit [Python.org](https://www.python.org/downloads/windows/)
-2. Download the latest Python installer (version 3.10 or higher)
+1. Visit [Python.org Downloads](https://www.python.org/downloads/windows/)
+2. Download Python 3.10 or higher (click the yellow "Download Python" button)
 3. Run the installer
-4. **Important**: Check the box that says "Add Python to PATH" during installation
+4. **IMPORTANT**: Check the box "Add Python to PATH" during installation
 5. Click "Install Now"
 
 **For Mac Users:**
-1. Visit [Python.org](https://www.python.org/downloads/macos/)
-2. Download the latest Python installer (version 3.10 or higher)
+1. Visit [Python.org Downloads](https://www.python.org/downloads/macos/)
+2. Download Python 3.10 or higher
 3. Run the installer and follow the instructions
 
-### Step 2: Choose a Code Editor
-
-- **Windsurf**: [Download Windsurf](https://www.windsurf.io/) (Recommended for beginners)
-- **VS Code**: [Download VS Code](https://code.visualstudio.com/)
-- **Cursor**: [Download Cursor](https://cursor.sh/)
-
-### Step 3: Install uv Package Manager
+### Step 3: Install PostgreSQL Database
 
 **For Windows Users:**
-1. Open PowerShell as Administrator
+1. Visit [PostgreSQL Downloads](https://www.postgresql.org/download/windows/)
+2. Download the installer for Windows
+3. Run the installer and follow the setup wizard
+4. Remember the password you set for the "postgres" user
+
+**For Mac Users:**
+1. Visit [PostgreSQL Downloads](https://www.postgresql.org/download/macosx/)
+2. Download the installer for macOS
+3. Run the installer and follow the setup wizard
+4. Remember the password you set for the "postgres" user
+
+### Step 4: Install uv Package Manager
+
+**For Windows Users:**
+1. Open Command Prompt or PowerShell:
+   - Press `Windows key + R`, type `cmd`, press Enter
+   - OR Press `Windows key + X`, select "Windows PowerShell (Admin)"
 2. Run this command:
-   ```powershell
+   ```
    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
    ```
 
 **For Mac Users:**
-1. Open Terminal (find it in Applications > Utilities)
+1. Open Terminal:
+   - Press `Command + Spacebar`, type "Terminal", press Enter
+   - OR Go to Applications > Utilities > Terminal
 2. Run this command:
-   ```bash
+   ```
    curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
 
-### Step 4: Download and Set Up psxGPT
+### Step 5: Get Your API Keys
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/ishaheen10/psxgpt.git
-   cd psxgpt
-   ```
+You'll need to sign up for these services and get API keys:
 
-2. Create a `.env` file with your Google Gemini API key:
-   ```
-   GEMINI_API_KEY=your_api_key_here
-   ```
+1. **[Google Gemini API](https://ai.google.dev/)**
+   - Click "Get API key in Google AI Studio"
+   - Sign in with your Google account
+   - Create a new API key
+   - Copy the key
 
-3. Create and activate a virtual environment:
-   ```bash
-   uv venv
-   # For Windows:
-   .venv\Scripts\activate
-   # For Mac/Linux:
-   source .venv/bin/activate
-   ```
+2. **[LlamaParse API](https://docs.cloud.llamaindex.ai/llamacloud/getting_started/api_key)**
+   - Sign up for LlamaCloud
+   - Go to API Keys section
+   - Create a new API key
+   - Copy the key (free tier includes 3,000 pages)
 
-4. Install dependencies and run:
-   ```bash
-   uv sync
-   python Step6CreateEmbeddings.py
-   python Step7LaunchGradioWithFilters.py
-   # OR for MCP server:
-   # python Step8MCPServerPsxGPT.py
-   ```
+3. **[Anthropic API](https://www.anthropic.com/)**
+   - Sign up for an Anthropic account
+   - Go to your dashboard
+   - Create an API key
+   - Copy the key
 
-5. Open your browser at http://localhost:7860 (for Gradio)
+4. **[Mistral API](https://console.mistral.ai/)** (optional, for scanned documents)
+   - Sign up for Mistral AI
+   - Go to API Keys
+   - Create a new key
+   - Copy the key
 
-## 🤝 Contributing
+**Save these keys safely** - you'll paste them into your .env file in the next step.
 
-This is an open-source project, and contributions are welcome! Here are some areas for improvement:
+### Step 6: Download and Setup psxGPT
 
-1. **PDF Processing**: Improve metadata tagging and extraction from financial statements
-2. **OCR Integration**: Add OCR for non-searchable PDFs
-3. **Multi-Bank Analysis**: Enhance performance for queries across multiple banks
-4. **Alternative Embedding Models**: Experiment with financial-specific models like FinBERT
-5. **Prompt Engineering**: Refine prompts for better response quality
-6. **MCP Extensions**: Expand MCP functionality for richer interactions with AI assistants
+```bash
+git clone https://github.com/ishaheen10/psxgpt.git
+cd psxgpt
 
-### How to Contribute
+# Setup environment
+uv venv && source .venv/bin/activate  # Mac
+uv venv && .venv\Scripts\activate     # Windows
+uv sync
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+# Configure API keys
+cp .env.example .env
+# Edit .env file with your API keys
 
-## ⚠️ Limitations
+# Setup database
+createdb analyst_psx
+psql -d analyst_psx -f chainlit_schema_psx.sql
+```
 
-- Currently optimized for bank financial statements from 2024
-- Works best with searchable PDFs
-- Single bank queries perform better than multi-bank comparisons
-- MCP integration requires a paid Claude subscription for complex queries
+### Quick Start Options
 
-## 🔮 Future Enhancements
+**Option A: Use Existing Data (Fastest)**
+If you have a `psx_bank_metadata` folder with processed financial data:
+```bash
+python Step6CreateEmbeddings.py
+python Step8MCPClientPsxGPT.py
+```
+Access at http://localhost:8000 (Login: user@psx.com / user2024)
 
-- Support for additional sectors beyond banking
-- Historical data analysis across multiple years
-- Automated browser-based downloading of missing files
-- OCR integration for non-searchable PDFs
-- Enhanced multi-bank comparison capabilities
-- Expanded MCP functionality with more specialized financial analysis tools
+**Option B: Process Your Own PDFs**
+To analyze your own financial documents:
+```bash
+# Option 1: Download from PSX (Pakistan Stock Exchange only)
+python Step1DownloadPDFsSearch.py  # Downloads from PSX website
+# OR modify script for other sources, or use browser-use for general purpose search
+
+# Option 2: Place your own PDFs in psx_bank_reports/ folder, then run:
+python Step2ConvertPDFtoMarkdown.py  # Uses LlamaParse or Tool1Mistral_OCR.py for scans
+python Step3ChunkMarkdown.py
+python Step4MetaDataTags.py
+python Step5CombineMetaData.py
+python Tool2ValidateProcessing.py   # Verify data quality
+python Step6CreateEmbeddings.py
+python Step8MCPClientPsxGPT.py
+```
+
+*Note: Step1 scripts are designed for PSX website. For other data sources, modify the download scripts or use a browser automation tool like browser-use.*
+
+## Customization for Other Financial Data
+
+To adapt psxGPT for different financial datasets:
+
+1. **Replace Data Source**: Modify `Step1DownloadPDFsSearch.py` to point to your data source
+2. **Update File Paths**: Change directory paths in scripts to match your folder structure
+3. **Adjust Metadata Extraction**: Modify `Step4MetaDataTags.py` for your document types
+4. **Configure OCR**: For scanned documents, ensure Mistral OCR is configured in `Step2ConvertPDFtoMarkdown.py`
+
+## Troubleshooting
+
+**Common Issues:**
+- **Scanned PDFs**: Use Mistral OCR option in Step 2 for better text extraction
+- **Large Files**: LlamaParse free tier has 3,000 page limit
+- **Database Connection**: Verify PostgreSQL is running and credentials in `.env` are correct
+- **API Limits**: Check API key quotas if processing fails
+
+**Performance:**
+- Processing time depends on document count and size
+- Vector embedding creation (Step 6) is the most time-intensive step
+- Consider processing documents in batches for large datasets
+
+## Authentication
+
+**Default Login Credentials:**
+- **Username:** `user@psx.com`
+- **Password:** `user2024`
+
+*Note: These are demo credentials hardcoded for testing. For production use, implement proper authentication.*
 
 ## 📄 License
 
