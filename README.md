@@ -35,7 +35,8 @@ psxGPT processes financial documents through an 8-step pipeline:
 
 ### Prerequisites
 
-- Python 3.11 or higher
+- **Python 3.11.10 (64-bit)** - This specific version is required for compatibility
+- Git - for downloading the code
 - PostgreSQL database
 - API Keys:
   - [Google Gemini](https://ai.google.dev/) - for embeddings and AI analysis
@@ -43,7 +44,43 @@ psxGPT processes financial documents through an 8-step pipeline:
   - [Anthropic](https://www.anthropic.com/) - for Claude AI integration
   - [Mistral](https://console.mistral.ai/) - for scanned document OCR
 
-### Step 1: Install Code Editor (IDE)
+### Step 1: Install Git
+
+**For Mac Users:**
+1. Open Terminal (press `Cmd + Space`, type "Terminal", and press Enter)
+2. Type the following command and press Enter:
+   ```
+   git --version
+   ```
+3. If Git is not installed, macOS will prompt you to install it automatically
+4. Follow the installation prompts
+
+**For Windows Users:**
+1. Go to [https://git-scm.com/download/win](https://git-scm.com/download/win)
+2. Download the installer for your system (64-bit recommended)
+3. Run the installer and follow the setup wizard
+4. Use all default settings unless you have specific preferences
+5. When installation is complete, you can access Git through "Git Bash" or Command Prompt
+
+### Step 2: Install Python 3.11.10 (64-bit)
+
+**IMPORTANT:** You must install Python 3.11.10 specifically, and it must be the 64-bit version.
+
+**For Mac Users:**
+1. Go to [https://www.python.org/downloads/release/python-31110/](https://www.python.org/downloads/release/python-31110/)
+2. Scroll down to "Files" section
+3. Download "macOS 64-bit universal2 installer"
+4. Run the installer and follow the prompts
+
+**For Windows Users:**
+1. Go to [https://www.python.org/downloads/release/python-31110/](https://www.python.org/downloads/release/python-31110/)
+2. Scroll down to "Files" section
+3. Download "Windows installer (64-bit)" - make sure it says 64-bit
+4. Run the installer
+5. **IMPORTANT:** Check the box "Add Python to PATH" during installation
+6. Click "Install Now"
+
+### Step 3: Install Code Editor (IDE)
 
 Choose one of these beginner-friendly code editors:
 - **[Windsurf](https://www.windsurf.io/)** (Recommended - AI-powered coding assistant)
@@ -52,37 +89,36 @@ Choose one of these beginner-friendly code editors:
 
 Download and install your chosen editor following the installer instructions.
 
-### Step 2: Install Git
+### Step 4: Download Pre-Built Search Index (Recommended)
 
-**For Windows Users:**
-1. Visit [Git for Windows](https://git-scm.com/download/win)
-2. Download the installer
-3. Run the installer and follow the setup wizard
-4. Use the default settings (recommended for beginners)
-5. Git will be available in Command Prompt and PowerShell
+**Option A: Use Pre-Built Index (Faster)**
 
-**For Mac Users:**
-1. Visit [Git for Mac](https://git-scm.com/download/mac)
-2. Download the installer
-3. Run the installer and follow the instructions
-4. Alternatively, if you have Homebrew: `brew install git`
-5. Git will be available in Terminal
+To save time, you can download a pre-built search index instead of creating one from scratch:
 
-### Step 3: Install Python
+1. Download the pre-built index from Google Drive:
+   [Download gemini_index_metadata.zip](https://drive.google.com/file/d/1yeH1ib5G1jBnqhzzoYBoZ0yz5s1y9MOP/view?usp=drive_link)
 
-**For Windows Users:**
-1. Visit [Python.org Downloads](https://www.python.org/downloads/windows/)
-2. Download Python 3.11 or higher (click the yellow "Download Python" button)
-3. Run the installer
-4. **IMPORTANT**: Check the box "Add Python to PATH" during installation
-   - This allows you to run Python commands from any folder in Command Prompt
-   - Without this, Windows won't recognize Python commands
-5. Click "Install Now"
+2. After downloading:
+   - **Unzip the file** - you should see a folder called `gemini_index_metadata`
+   - **Copy this entire folder** to your psxChatGPT project directory
+   - The folder should be placed directly in the main project folder (same level as the Python files)
 
-**For Mac Users:**
-1. Visit [Python.org Downloads](https://www.python.org/downloads/macos/)
-2. Download Python 3.11 or higher
-3. Run the installer and follow the instructions
+**Option B: Create Your Own Index (Takes Longer)**
+
+Alternatively, you can create the search index yourself using `Step6CreateEmbeddings.py`, but this will take significantly longer as it processes all the financial documents and creates embeddings.
+
+### Step 5: Install Playwright (Required for Step 1 Files)
+
+Playwright is needed to run the Step 1 files that download financial documents. After installing Python and setting up your project, you'll need to install Playwright:
+
+1. Open Terminal (Mac) or Command Prompt (Windows)
+2. Navigate to your project folder
+3. Run this command:
+   ```
+   playwright install
+   ```
+
+This installs the browser components needed for automated document downloading.
 
 ### Step 4: Install PostgreSQL Database
 
