@@ -418,11 +418,8 @@ async def psx_health_check() -> Dict[str, Any]:
 
 # ─────────────────────────── Entry Point ────────────────────────────────
 if __name__ == "__main__":
-    log.info("🚀 Starting Enhanced PSX Financial MCP Server...")
+    log.info("🚀 Starting Enhanced PSX Financial MCP Server (stdio mode)...")
     
-    # Get port from Render environment
-    port = int(os.getenv("PORT", 8000))
-    
-    # Use SSE transport for browser/HTTP compatibility
-    # Bind to all interfaces for Render
-    mcp.run(transport="sse", host="0.0.0.0", port=port) 
+    # Use stdio transport for MCP client communication
+    # No host/port needed for stdio - communicates via stdin/stdout
+    mcp.run(transport="stdio") 

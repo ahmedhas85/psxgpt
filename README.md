@@ -18,7 +18,7 @@ psxGPT will find the necessary information and compile a report using ONLY data 
 
 ## How It Works
 
-psxGPT processes financial documents through a 6-step pipeline:
+psxGPT processes financial documents through an 8-step pipeline:
 
 1. **Download PDFs** (`Step1DownloadPDFsSearch.py` or `Step1DownloadPDFsTickers.py`)
 2. **Convert to Markdown** (`Step2ConvertPDFtoMarkdown.py`) - Uses LlamaParse or `Tool1Mistral_OCR.py` for scanned documents
@@ -26,12 +26,12 @@ psxGPT processes financial documents through a 6-step pipeline:
 4. **Extract Metadata** (`Step4MetaDataTags.py`) - Identifies companies, dates, report types
 5. **Combine Data** (`Step5CombineMetaData.py`) - Consolidates all metadata
 6. **Build Search Index** (`Step6CreateEmbeddings.py`) - Creates vector embeddings for AI search
+7. **Start Backend Server** (`Step7MCPServerPsxGPT.py`) - Launches the data query server
+8. **Launch Web Interface** (`Step8MCPClientPsxGPT.py`) - Starts the user-friendly chat interface
 
 **Quality Assurance:** Use `Tool2ValidateProcessing.py` to verify data quality after processing.
 
-The web interface (`Step8MCPClientPsxGPT.py`) connects to the backend server (`Step7MCPServerPsxGPT.py`) to answer user queries.
-
-## Quick Start
+## How to Get Started
 
 ### Prerequisites
 
@@ -52,21 +52,39 @@ Choose one of these beginner-friendly code editors:
 
 Download and install your chosen editor following the installer instructions.
 
-### Step 2: Install Python
+### Step 2: Install Git
+
+**For Windows Users:**
+1. Visit [Git for Windows](https://git-scm.com/download/win)
+2. Download the installer
+3. Run the installer and follow the setup wizard
+4. Use the default settings (recommended for beginners)
+5. Git will be available in Command Prompt and PowerShell
+
+**For Mac Users:**
+1. Visit [Git for Mac](https://git-scm.com/download/mac)
+2. Download the installer
+3. Run the installer and follow the instructions
+4. Alternatively, if you have Homebrew: `brew install git`
+5. Git will be available in Terminal
+
+### Step 3: Install Python
 
 **For Windows Users:**
 1. Visit [Python.org Downloads](https://www.python.org/downloads/windows/)
-2. Download Python 3.10 or higher (click the yellow "Download Python" button)
+2. Download Python 3.11 or higher (click the yellow "Download Python" button)
 3. Run the installer
 4. **IMPORTANT**: Check the box "Add Python to PATH" during installation
+   - This allows you to run Python commands from any folder in Command Prompt
+   - Without this, Windows won't recognize Python commands
 5. Click "Install Now"
 
 **For Mac Users:**
 1. Visit [Python.org Downloads](https://www.python.org/downloads/macos/)
-2. Download Python 3.10 or higher
+2. Download Python 3.11 or higher
 3. Run the installer and follow the instructions
 
-### Step 3: Install PostgreSQL Database
+### Step 4: Install PostgreSQL Database
 
 **For Windows Users:**
 1. Visit [PostgreSQL Downloads](https://www.postgresql.org/download/windows/)
@@ -80,7 +98,7 @@ Download and install your chosen editor following the installer instructions.
 3. Run the installer and follow the setup wizard
 4. Remember the password you set for the "postgres" user
 
-### Step 4: Install uv Package Manager
+### Step 5: Install uv Package Manager
 
 **For Windows Users:**
 1. Open Command Prompt or PowerShell:
@@ -100,11 +118,11 @@ Download and install your chosen editor following the installer instructions.
    curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
 
-### Step 5: Get Your API Keys
+### Step 6: Get Your API Keys
 
 You'll need to sign up for these services and get API keys:
 
-1. **[Google Gemini API](https://ai.google.dev/)**
+1. **[Google Gemini API](https://ai.google.dev/)** (Credit card required)
    - Click "Get API key in Google AI Studio"
    - Sign in with your Google account
    - Create a new API key
@@ -116,13 +134,13 @@ You'll need to sign up for these services and get API keys:
    - Create a new API key
    - Copy the key (free tier includes 3,000 pages)
 
-3. **[Anthropic API](https://www.anthropic.com/)**
+3. **[Anthropic API](https://www.anthropic.com/)** (Credit card required)
    - Sign up for an Anthropic account
    - Go to your dashboard
    - Create an API key
    - Copy the key
 
-4. **[Mistral API](https://console.mistral.ai/)** (optional, for scanned documents)
+4. **[Mistral API](https://console.mistral.ai/)** (Credit card required, optional for scanned documents)
    - Sign up for Mistral AI
    - Go to API Keys
    - Create a new key
@@ -130,7 +148,7 @@ You'll need to sign up for these services and get API keys:
 
 **Save these keys safely** - you'll paste them into your .env file in the next step.
 
-### Step 6: Download and Setup psxGPT
+### Step 7: Download and Setup psxGPT
 
 ```bash
 git clone https://github.com/ishaheen10/psxgpt.git
@@ -140,12 +158,44 @@ cd psxgpt
 uv venv && source .venv/bin/activate  # Mac
 uv venv && .venv\Scripts\activate     # Windows
 uv sync
+```
 
-# Configure API keys
-cp .env.example .env
-# Edit .env file with your API keys
+#### Configure API Keys
+1. Copy the example file:
+   ```bash
+   cp .env.example .env
+   ```
 
-# Setup database
+2. Open the `.env` file in your code editor and replace the placeholder values with your actual API keys:
+   ```
+   # API Keys for psxGPT
+   GEMINI_API_KEY=your_actual_gemini_key_here
+   ANTHROPIC_API_KEY=your_actual_anthropic_key_here
+   LLAMA_CLOUD_API_KEY=your_actual_llama_cloud_key_here
+   MISTRAL_API_KEY=your_actual_mistral_key_here
+   
+   # Database URLs (replace 'your_password' with your PostgreSQL password)
+   DATABASE_URL=postgresql://postgres:your_password@localhost:5432/analyst_psx
+   DATABASE_DIRECT_URL=postgresql://postgres:your_password@localhost:5432/analyst_psx
+   ```
+
+#### Configure Chainlit Settings
+1. Open `.chainlit/config.toml` in your code editor
+2. Update the database configuration if needed:
+   ```toml
+   [project]
+   # Whether to enable telemetry (default: true). No personal data is collected.
+   enable_telemetry = true
+   
+   # Duration (in seconds) during which the session is saved when the connection is lost
+   session_timeout = 3600
+   
+   # Duration (in seconds) of the user session expiry
+   user_session_timeout = 1296000  # 15 days
+   ```
+
+#### Setup Database
+```bash
 createdb analyst_psx
 psql -d analyst_psx -f chainlit_schema_psx.sql
 ```
