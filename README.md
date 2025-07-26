@@ -1,5 +1,5 @@
 # Change log of changes different from original published by ishaheen
-Aug 26 2025: 
+July 26 2025: 
 
 Added a requirements checker to list and install modules automatically for the project.
 
