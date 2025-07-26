@@ -1,7 +1,7 @@
 # Change log of changes different from original published by ishaheen
 July 26 2025: 
 
-Added a requirements checker to list and install modules automatically for the project.
+Added a requirements checker to list and install modules automatically for the project, particularly important as the .venv starts off empty with out core mdoules or any requirements installs.
 
 Have added PostGres related troubleshooting issues for Linux in general and Ubuntu in specific 
 
