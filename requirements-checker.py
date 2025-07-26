@@ -1,16 +1,77 @@
+'''
+Last update July 27, 2025
+
+V1.1
+debugged get_imported_modules for utf-8 errors
+added installation of standard modules on start of file
+solved for multiple entries in a line
+AI code cleaning implemented
+Auto directory detection implemented
+
+V1.0
+Base file
+'''
 import os, sys
 import subprocess
+
+#preconfig
+#install standard modules
+subprocess.run([sys.executable, "-m", "ensurepip", "--upgrade"], check=True)
+subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], check=True)
+
+core_utils = ['pkgutil', 'importlib', 'stdlib_list', 'regex']
+
+for pkgs in core_utils:
+    subprocess.run([sys.executable, '-m', 'pip', 'install'] + list([pkgs]))
+
+
 import pkgutil
 import importlib
+import regex
 from importlib.metadata import distributions
 from pathlib import Path
 from stdlib_list import stdlib_list
+import ast
 
 def is_valid_package_name(name):
     # Very basic check for invalid names
     return all(c.isalnum() or c in {'-', '_', '.'} for c in name) and not name.endswith(',')
 
+
 def get_imported_modules(directory):
+    """
+    Extracts imported modules from all Python files in the given directory.
+    """
+    imported_modules = set()
+    std_libs = set(stdlib_list(f"{sys.version_info.major}.{sys.version_info.minor}"))
+
+    for py_file in Path(directory).rglob('*.py'):
+        print(f"Checking {py_file} for modules")
+        with open(py_file, 'r', encoding='utf-8') as file:
+            try:
+                tree = ast.parse(file.read(), filename=str(py_file))
+            except SyntaxError as e:
+                print(f"SyntaxError in {py_file}: {e}")
+                continue
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    module = alias.name.split('.')[0]
+                    if is_valid_package_name(module):
+                        imported_modules.add(module)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    module = node.module.split('.')[0]
+                    if is_valid_package_name(module):
+                        imported_modules.add(module)
+
+    # Filter out standard library modules
+    filtered_packages = [pkg for pkg in imported_modules if pkg.lower() not in std_libs]
+    return filtered_packages
+
+
+def get_imported_modules_deprecated(directory):
     """
     Extracts imported modules from all Python files in the given directory.
     """
@@ -21,6 +82,7 @@ def get_imported_modules(directory):
 
     # Traverse all Python files in the directory
     for py_file in Path(directory).rglob('*.py'):
+        print(f"checking {py_file} for modules")
         with open(py_file, 'r', encoding='utf-8') as file:
             content = file.read()
 
@@ -28,7 +90,7 @@ def get_imported_modules(directory):
         for line in content.splitlines():
             if line.startswith('import ') or line.startswith('from '):
                 # Handle standard import and from-import cases
-                #print(line) #testing if it catches this, working
+                print(line) #testing if it catches this, working
                 parts = line.split()
                 # print(parts)
                 if len(parts) >= 2:
@@ -118,7 +180,17 @@ def install_missing_from_requirements(requirements_path='requirements.txt'):
 
 def main():
     
-    directory = input("Enter the directory path: ")
+    #detect current path and change the CWD
+    path_file = os.path.realpath(__file__)
+    #filename_1 = os.path.normcase(__file__)
+    #filename_1
+    head, tail = os.path.split(path_file)
+    os.chdir(regex.search("(.+)"+tail,path_file)[1])
+    path = head.replace("\\","/")+"/"
+    
+    print(f"setting {path} directory as default")
+    
+    directory = path
     
     # Get imported modules
     imported_modules = get_imported_modules(directory)
