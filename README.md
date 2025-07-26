@@ -5,6 +5,8 @@ Added a requirements checker to list and install modules automatically for the p
 
 Have added PostGres related troubleshooting issues for Linux in general and Ubuntu in specific 
 
+There still are missing modules that have not been detected for some reason for instance llama gen ai so have manually fixed that
+
 
 # psxGPT
 
