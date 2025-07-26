@@ -1,3 +1,9 @@
+# Change log from original published by ishaheen
+Aug 26 2025: 
+Added a requirements checker to list and install modules automatically for the project.
+Have added PostGres related troubleshooting issues for Linux in general and Ubuntu in specific 
+
+
 # psxGPT
 
 A ChatGPT-like application for Pakistan Stock Exchange (PSX) financial data, which can be repurposed for any financial data including querying a data room during acquisition due diligence.
@@ -286,6 +292,43 @@ To adapt psxGPT for different financial datasets:
 - Processing time depends on document count and size
 - Vector embedding creation (Step 6) is the most time-intensive step
 - Consider processing documents in batches for large datasets
+
+**PostGres Errors**
+- Incase you encounter PostGres errors on Ubuntu / Linux, following might be helpful
+
+*Method 1:*
+PostgreSQL Setup on Ubuntu
+Access PostgreSQL:
+sudo -u postgres psql
+
+Create Superuser:
+CREATE ROLE root WITH SUPERUSER LOGIN PASSWORD 'yourpassword';
+\q
+
+Create a database:
+createdb analyst_psx
+
+*Method 2:*
+Ubuntu Specific
+Switch to postgres user:
+sudo -i -u postgres
+
+Create a database:
+createdb analyst_psx
+
+Exit:
+exit
+
+*Method 3:*
+Manage Users & DBs
+Check current user:
+whoami
+
+Create a user:
+sudo -u postgres createuser --interactive
+
+Create a database:
+createdb analyst_psx
 
 ## Authentication
 
