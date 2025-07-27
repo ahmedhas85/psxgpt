@@ -418,8 +418,24 @@ async def psx_health_check() -> Dict[str, Any]:
 
 # ─────────────────────────── Entry Point ────────────────────────────────
 if __name__ == "__main__":
-    log.info("🚀 Starting Enhanced PSX Financial MCP Server (stdio mode)...")
+    log.info("🚀 Starting Enhanced PSX Financial MCP Server (HTTP/SSE mode)...")
     
-    # Use stdio transport for MCP client communication
-    # No host/port needed for stdio - communicates via stdin/stdout
-    mcp.run(transport="stdio") 
+    port = int(os.getenv("PORT", 8001))
+    
+    # Detect environment and set appropriate host
+    # In Codespaces, CODESPACES env var is set to 'true'
+    is_codespaces = os.getenv("CODESPACES") == "true"
+    host = "0.0.0.0" if is_codespaces else "127.0.0.1"
+    
+    log.info(f"🌐 Environment: {'GitHub Codespaces' if is_codespaces else 'Local'}")
+    
+    if is_codespaces:
+        codespace_name = os.getenv("CODESPACE_NAME", "unknown")
+        codespace_url = f"https://{codespace_name}-{port}.app.github.dev/sse"
+        log.info(f"🔗 Codespaces URL: {codespace_url}")
+        log.info(f"🎯 Copy this URL for your client: {codespace_url}")
+    else:
+        log.info(f"🔗 Local server URL: http://{host}:{port}/sse")
+    
+    # Use SSE transport for HTTP/browser compatibility
+    mcp.run(transport="sse", host=host, port=port) 

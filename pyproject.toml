@@ -19,11 +19,8 @@ dependencies = [
     "chainlit",
     "anthropic",
     "asyncpg",
-    "browser-use>=0.4.0",
     "mistralai",
-    "supabase",
     "fastmcp>=2.10.1",
     "psycopg2-binary",
     "sqlalchemy",
-    "dspy-ai>=2.6.0",
 ]

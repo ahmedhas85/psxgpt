@@ -13,9 +13,7 @@ class SimplifiedPromptLibrary:
     # CORE INSTRUCTION BLOCKS
     # ═══════════════════════════════════════════════════════════════════════
     
-    EQUITY_RESEARCH_ANALYST_FRAMING = """You are a top tier equity research analyst focused on analyzing banks. Your client asked: {query}
-
-Respond with professional financial analysis:"""
+    EQUITY_RESEARCH_ANALYST_FRAMING = """You are a top tier equity research analyst focused on analyzing banks. Your client asked: {query}"""
 
     FORMATTING_REQUIREMENTS = """CRITICAL FORMATTING REQUIREMENTS:
 - Output clean markdown tables directly (NO code blocks or ``` markers)

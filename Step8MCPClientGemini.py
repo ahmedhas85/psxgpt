@@ -1,9 +1,9 @@
 """
 PSX Financial Client - Enhanced Intelligence & Orchestration Layer
-Handles natural language parsing with Claude 4 Sonnet and orchestrates MCP server calls.
+Handles natural language parsing with Gemini 2.5 Pro and orchestrates MCP server calls.
 Enhanced with improved error handling, logging, and user experience.
 
-Flow: User Query → Claude Parsing → Query Execution → Response Synthesis
+Flow: User Query → Gemini Parsing → Query Execution → Response Synthesis
 """
 
 import asyncio
@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
-import anthropic
 import chainlit as cl
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -27,10 +26,7 @@ TICKERS_PATH = BASE_DIR / "tickers.json"
 CONTEXT_DIR = BASE_DIR / "enhanced_client_contexts"
 CONTEXT_DIR.mkdir(exist_ok=True)
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not ANTHROPIC_API_KEY:
-    raise RuntimeError("ANTHROPIC_API_KEY environment variable not set")
 if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY environment variable not set")
 
@@ -56,11 +52,10 @@ except Exception as e:
     log.error(f"❌ Failed to load tickers: {e}")
     TICKERS = []
 
-# Anthropic client with enhanced configuration
-anthropic_client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, timeout=60.0)
-
-# Google GenAI for streaming responses (uses maximum token limits by default)
+# Google GenAI for both parsing and streaming responses
 from llama_index.llms.google_genai import GoogleGenAI
+
+# One Gemini instance for **streaming answers**
 streaming_llm = GoogleGenAI(
     model="models/gemini-2.5-pro", 
     api_key=GEMINI_API_KEY, 
@@ -68,15 +63,22 @@ streaming_llm = GoogleGenAI(
     timeout=120.0
 )
 
-# Google GenAI streaming LLM initialized
+# One "strict JSON" instance for **query-parsing** (lower temp, 8k tokens max)
+gemini_parser = GoogleGenAI(
+    model="models/gemini-2.5-pro",
+    api_key=GEMINI_API_KEY,
+    temperature=0.0,
+    max_tokens=8000,
+    timeout=60.0
+)
 
 # Import prompts library
 from prompts import prompts
 
 # ─────────────────────────── Conversation Context Management ─────────────────
 class ConversationContext(BaseModel):
-    """Simple conversation context following Claude's stateless API pattern"""
-    messages: List[Dict[str, str]] = Field(default_factory=list, description="Conversation history in Claude format")
+    """Simple conversation context (LLM-agnostic)"""
+    messages: List[Dict[str, str]] = Field(default_factory=list, description="Conversation history")
     
     def add_message(self, role: str, content: str):
         """Add a message to conversation history"""
@@ -85,8 +87,8 @@ class ConversationContext(BaseModel):
         if len(self.messages) > 10:
             self.messages = self.messages[-10:]
     
-    def get_messages_for_claude(self) -> List[Dict[str, str]]:
-        """Get conversation history in Claude's required format"""
+    def get_context(self) -> List[Dict[str, str]]:
+        """Get conversation history"""
         return self.messages.copy()
     
     def get_context_summary(self) -> str:
@@ -283,232 +285,312 @@ def find_best_ticker_match(query_ticker: str) -> str:
     # Return original if no match found
     return query_ticker
 
-async def parse_query_with_claude(user_query: str, conversation_context: Optional[ConversationContext] = None) -> QueryPlan:
-    """Use Claude 4 Sonnet to parse user query into structured query plan with conversation context"""
-    log.info(f"Parsing query with Claude: {user_query[:100]}...")
+async def parse_query_with_gemini(user_query: str, conversation_context: Optional[ConversationContext] = None) -> QueryPlan:
+    """Use Gemini 2.5 Pro to parse user query into structured query plan with conversation context"""
+    log.info(f"Parsing query with Gemini: {user_query[:100]}...")
     
-    # Create ticker context for Claude - only banks
+    # Create ticker context for Gemini - only banks
     bank_tickers = [t["Symbol"] for t in TICKERS if "bank" in t["Company Name"].lower()]
     
     # Detect quarterly requests for Q4 calculation logic
     is_quarterly_request = any(q_term in user_query.lower() for q_term in ["quarterly", "quarter", "q1", "q2", "q3", "q4"])
     
-    # Build messages array for Claude's stateless API
-    messages = []
-    
-    # Add conversation history if available (Claude's native format)
-    if conversation_context:
-        context_messages = conversation_context.get_messages_for_claude()
-        if context_messages:
-            messages.extend(context_messages)
-            log.info(f"📝 Added {len(context_messages)} previous messages to conversation context")
-    
-    # Add current user query
-    user_prompt = prompts.get_parsing_user_prompt(user_query, bank_tickers, is_quarterly_request)
-    messages.append({"role": "user", "content": user_prompt})
-
     try:
-        response = await anthropic_client.messages.create(
-            model="claude-4-sonnet-20250514",
-            max_tokens=30000,
-            temperature=0.1,
-            system=prompts.PARSING_SYSTEM_PROMPT,
-            messages=messages,  # Use Claude's native message format
-            tools=[{
-                "name": "create_query_plan",
-                "description": "Create structured query plan for PSX financial data",
-                "input_schema": QueryPlan.model_json_schema()
-            }],
-            tool_choice={"type": "tool", "name": "create_query_plan"}
-        )
+        # Build the prompt with conversation context if available
+        user_prompt = prompts.get_parsing_user_prompt(user_query, bank_tickers, is_quarterly_request)
         
-        if response.content[0].type == "tool_use":
-            parsed_data = response.content[0].input
-            query_plan = QueryPlan.model_validate(parsed_data)
+        # Add conversation context to the prompt if available (detailed approach like Claude)
+        if conversation_context and conversation_context.get_context():
+            context_messages = conversation_context.get_context()
             
-            # Enhanced quarterly processing: automatically add annual queries for Q4 calculation
-            if is_quarterly_request:
-                log.info("🔢 Quarterly request detected - adding annual queries for Q4 calculation")
-                
-                # Extract unique companies and statement types from quarterly queries
-                companies_for_annual = set()
-                statement_types_for_annual = set()
-                
-                for query_spec in query_plan.queries:
-                    filters = query_spec.get("metadata_filters", {})
-                    if "ticker" in filters:
-                        companies_for_annual.add(filters["ticker"])
-                    if "statement_type" in filters:
-                        statement_types_for_annual.add(filters["statement_type"])
-                
-                # Add annual queries for Q4 calculation - keep search flexible for year matching
-                annual_queries = []
-                for company in companies_for_annual:
-                    for stmt_type in statement_types_for_annual:
-                        annual_query = {
-                            "search_query": f"{company} {stmt_type.replace('_', ' ')} annual",
-                            "metadata_filters": {
-                                "ticker": company,
-                                "statement_type": stmt_type,
-                                "is_statement": "yes",
-                                "filing_type": "annual"
-                            }
-                        }
-                        annual_queries.append(annual_query)
-                
-                # Add annual queries to the plan
-                query_plan.queries.extend(annual_queries)
-                log.info(f"🎯 Enhanced quarterly plan: {len(query_plan.queries)} total queries (including annual for Q4)")
+            # Build detailed conversation history (similar to Claude's approach)
+            context_block = "\n\n=== PREVIOUS CONVERSATION CONTEXT ===\n"
+            for i, msg in enumerate(context_messages[-4:], 1):  # Last 4 messages for context
+                role = msg.get("role", "unknown")
+                content = msg.get("content", "")[:300]  # Limit length to avoid token overflow
+                context_block += f"{i}. {role.upper()}: {content}\n"
             
-            # Validate and fix empty search queries - keep metadata filters minimal 
-            valid_queries = []
+            context_block += "\n=== END CONTEXT ===\n"
+            context_block += "IMPORTANT: Use this conversation history to resolve pronouns like 'they', 'their', 'them' and company references in the current query.\n"
+            context_block += "For follow-up queries, focus on the companies mentioned in the CURRENT query first, then use context for missing information.\n"
+            context_block += "If user asks for specific financial statements (balance sheet, P&L, cash flow), use intent='statement' even for multiple companies.\n\n"
+            
+            user_prompt = context_block + user_prompt
+            log.info(f"📝 Added detailed conversation context for {len(context_messages)} messages")
+        
+        # Combine system prompt with user prompt and add JSON formatting instruction
+        full_prompt = prompts.PARSING_SYSTEM_PROMPT + "\n\n" + user_prompt + "\n\nRespond with ONLY the QueryPlan JSON, no other text."
+        
+        # Use manual JSON parsing (only approach that works with Gemini)
+        response = await gemini_parser.acomplete(full_prompt)
+        response_text = str(response).strip()
+        
+        log.info(f"📝 Raw Gemini response: {response_text[:200]}...")
+        
+        # Clean up markdown formatting if present
+        if response_text.startswith("```json"):
+            response_text = response_text.replace("```json", "").replace("```", "").strip()
+        elif response_text.startswith("```"):
+            response_text = response_text.replace("```", "").strip()
+        
+        # Parse JSON response
+        try:
+            parsed_json = json.loads(response_text)
+            
+            # Convert to QueryPlan object for consistency
+            query_plan = QueryPlan(**parsed_json)
+            
+        except (json.JSONDecodeError, TypeError, ValueError) as parse_error:
+            log.error(f"JSON parsing failed: {parse_error}")
+            log.error(f"Response text: '{response_text}'")
+            raise ValueError(f"Failed to parse Gemini response as JSON: {parse_error}")
+            
+        # Validate it's a QueryPlan object
+        if not isinstance(query_plan, QueryPlan):
+            raise ValueError(f"Expected QueryPlan, got {type(query_plan)}")
+        
+        # Enhanced quarterly processing: automatically add annual queries for Q4 calculation
+        if is_quarterly_request:
+            log.info("🔢 Quarterly request detected - adding annual queries for Q4 calculation")
+            
+            # Extract unique companies and statement types from quarterly queries
+            companies_for_annual = set()
+            statement_types_for_annual = set()
+            
             for query_spec in query_plan.queries:
-                search_query = query_spec.get("search_query", "").strip()
-                metadata_filters = query_spec.get("metadata_filters", {})
-                
-                # Ensure quarterly requests have proper filing_type
-                if is_quarterly_request and "filing_type" not in metadata_filters:
-                    # Check if this is a quarterly-specific query (not annual)
-                    if "annual" not in search_query.lower():
-                        metadata_filters["filing_type"] = "quarterly"
-                        log.info("🔧 Added filing_type=quarterly for quarterly request")
-                
-                # Validate and correct ticker symbols using tickers.json
-                if "ticker" in metadata_filters:
-                    original_ticker = metadata_filters["ticker"]
-                    
-                    # Find best match from actual tickers.json data
-                    corrected_ticker = find_best_ticker_match(original_ticker)
-                    if corrected_ticker != original_ticker:
-                        metadata_filters["ticker"] = corrected_ticker
-                        log.info(f"Corrected ticker using tickers.json: {original_ticker} → {corrected_ticker}")
-                
-                # Ensure critical metadata filters are present based on intent
-                if query_plan.intent == "statement" or "statement" in user_query.lower():
-                    metadata_filters["is_statement"] = "yes"
-                    # Don't set is_note for statement requests
-                    log.info("Added is_statement=yes for statement request")
-                
-                # Enhanced statement detection for common phrases
-                statement_keywords = ["balance sheet", "profit and loss", "cash flow", "income statement", "p&l", "p & l"]
-                if any(keyword in user_query.lower() for keyword in statement_keywords):
-                    metadata_filters["is_statement"] = "yes"
-                    # Don't set is_note for statement keywords
-                    log.info(f"Added is_statement=yes filter for statement keywords in query")
-                
-                # Handle explicit note requests - but don't override statement requests
-                if "note" in user_query.lower():
-                    # If this is ONLY a note request (no statement keywords), make it a note query
-                    if not any(keyword in user_query.lower() for keyword in statement_keywords):
-                        metadata_filters["is_note"] = "yes"
-                        metadata_filters["is_statement"] = "no"
-                        log.info("Added is_note=yes filter for note-only request")
-                    # If it's a combined statement + notes request, this query stays as statement
-                    # (We'll add note queries separately later)
-                
-                if not search_query:
-                    # Create a fallback search query using available information
-                    ticker = metadata_filters.get("ticker", "")
-                    statement_type = metadata_filters.get("statement_type", "").replace("_", " ")
-                    
-                    if ticker or statement_type:
-                        fallback_query = f"{ticker} {statement_type} {user_query}".strip()
-                        query_spec["search_query"] = fallback_query
-                        log.info(f"Generated fallback search query: '{fallback_query}'")
-                    else:
-                        # If we can't create a meaningful query, use the original user query
-                        query_spec["search_query"] = user_query
-                        log.info(f"Using original query as fallback: '{user_query}'")
-                
-                # CRITICAL VALIDATION: Ensure mutual exclusivity between is_statement and is_note
-                if metadata_filters.get("is_statement") == "yes" and metadata_filters.get("is_note") == "yes":
-                    log.error(f"❌ MUTUAL EXCLUSIVITY VIOLATION: Both is_statement and is_note are 'yes' - fixing...")
-                    
-                    # Determine which one should be kept based on query content
-                    if "note" in user_query.lower() and not any(keyword in user_query.lower() for keyword in ["balance sheet", "profit and loss", "cash flow", "income statement", "p&l", "p & l"]):
-                        # Pure note request
-                        metadata_filters["is_statement"] = "no"
-                        metadata_filters["is_note"] = "yes"
-                        log.info("Fixed to note-only query: is_statement=no, is_note=yes")
-                    else:
-                        # Statement request (possibly with notes to be handled separately)
-                        metadata_filters["is_statement"] = "yes"
-                        metadata_filters["is_note"] = "no"
-                        log.info("Fixed to statement query: is_statement=yes, is_note=no")
-                
-                # CRITICAL VALIDATION: Ensure note_link is only present when is_note="yes" 
-                if metadata_filters.get("is_statement") == "yes" and "note_link" in metadata_filters:
-                    log.warning(f"⚠️ Removing note_link from statement query - note_link should only exist for notes")
-                    del metadata_filters["note_link"]
-                
-                # Update the query spec with validated metadata filters
-                query_spec["metadata_filters"] = metadata_filters
-                valid_queries.append(query_spec)
+                filters = query_spec.get("metadata_filters", {})
+                if "ticker" in filters:
+                    companies_for_annual.add(filters["ticker"])
+                if "statement_type" in filters:
+                    statement_types_for_annual.add(filters["statement_type"])
             
-            # Update the query plan with validated queries
-            query_plan.queries = valid_queries
-            
-            # Handle combined statement + notes requests
-            # If user asked for notes AND we have statement queries, add corresponding note queries
-            user_query_lower = user_query.lower()
-            if "note" in user_query_lower and any("is_statement" in q.get("metadata_filters", {}) and 
-                                                 q["metadata_filters"]["is_statement"] == "yes" 
-                                                 for q in valid_queries):
-                
-                log.info("🗒️ Combined statement + notes request detected - adding note queries")
-                statement_keywords = ["balance sheet", "profit and loss", "cash flow", "income statement", "p&l", "p & l"]
-                
-                # Find statement queries and create corresponding note queries
-                additional_note_queries = []
-                for query_spec in valid_queries:
-                    metadata_filters = query_spec.get("metadata_filters", {})
-                    if metadata_filters.get("is_statement") == "yes":
-                        # Create corresponding note query
-                        note_query = {
-                            "search_query": query_spec["search_query"].replace("account", "notes").replace("statement", "notes"),
-                            "metadata_filters": {
-                                **{k: v for k, v in metadata_filters.items() 
-                                   if k not in ["is_statement", "is_note", "statement_type"]},
-                                "is_statement": "no",
-                                "is_note": "yes"
-                            }
+            # Add annual queries for Q4 calculation - keep search flexible for year matching
+            annual_queries = []
+            for company in companies_for_annual:
+                for stmt_type in statement_types_for_annual:
+                    annual_query = {
+                        "search_query": f"{company} {stmt_type.replace('_', ' ')} annual",
+                        "metadata_filters": {
+                            "ticker": company,
+                            "statement_type": stmt_type,
+                            "is_statement": "yes",
+                            "is_note": "no",
+                            "filing_type": "annual"
                         }
-                        
-                        # Set note_link based on statement_type
-                        if "statement_type" in metadata_filters:
-                            note_query["metadata_filters"]["note_link"] = metadata_filters["statement_type"]
-                        else:
-                            # Try to infer from search query
-                            search_lower = query_spec["search_query"].lower()
-                            if any(kw in search_lower for kw in ["profit and loss", "p&l", "p & l"]):
-                                note_query["metadata_filters"]["note_link"] = "profit_and_loss"
-                            elif "balance sheet" in search_lower:
-                                note_query["metadata_filters"]["note_link"] = "balance_sheet"
-                            elif "cash flow" in search_lower:
-                                note_query["metadata_filters"]["note_link"] = "cash_flow"
-                        
-                        additional_note_queries.append(note_query)
-                        log.info(f"📝 Added note query for {metadata_filters.get('ticker', 'company')}: note_link={note_query['metadata_filters'].get('note_link')}")
-                
-                # Add note queries to the plan
-                query_plan.queries.extend(additional_note_queries)
-                log.info(f"🎯 Enhanced plan: {len(query_plan.queries)} total queries ({len(valid_queries)} statements + {len(additional_note_queries)} notes)")
+                    }
+                    annual_queries.append(annual_query)
             
-            log.info(f"Claude parsing successful - Companies: {query_plan.companies}, Intent: {query_plan.intent}, Confidence: {query_plan.confidence}, Queries: {len(query_plan.queries)}")
-            return query_plan
-        else:
-            raise ValueError("Claude didn't use the expected tool")
+            # Add annual queries to the plan
+            query_plan.queries.extend(annual_queries)
+            log.info(f"➕ Added {len(annual_queries)} annual queries for Q4 calculation")
+        
+        # ═══════════════════════════════════════════════════════════════════════
+        # COMPREHENSIVE QUERY VALIDATION (ported from Claude version)
+        # ═══════════════════════════════════════════════════════════════════════
+        
+        # Validate and fix empty search queries - keep metadata filters minimal 
+        valid_queries = []
+        for query_spec in query_plan.queries:
+            search_query = query_spec.get("search_query", "").strip()
+            metadata_filters = query_spec.get("metadata_filters", {})
+            
+            # Ensure quarterly requests have proper filing_type
+            if is_quarterly_request and "filing_type" not in metadata_filters:
+                # Check if this is a quarterly-specific query (not annual)
+                if "annual" not in search_query.lower():
+                    metadata_filters["filing_type"] = "quarterly"
+                    log.info("🔧 Added filing_type=quarterly for quarterly request")
+            
+            # Validate and correct ticker symbols using tickers.json
+            if "ticker" in metadata_filters:
+                original_ticker = metadata_filters["ticker"]
+                
+                # Find best match from actual tickers.json data
+                corrected_ticker = find_best_ticker_match(original_ticker)
+                if corrected_ticker != original_ticker:
+                    metadata_filters["ticker"] = corrected_ticker
+                    log.info(f"Corrected ticker using tickers.json: {original_ticker} → {corrected_ticker}")
+            
+            # Ensure critical metadata filters are present based on intent
+            if query_plan.intent == "statement" or "statement" in user_query.lower():
+                metadata_filters["is_statement"] = "yes"
+                # Don't set is_note for statement requests
+                log.info("Added is_statement=yes for statement request")
+            
+            # Enhanced statement detection for common phrases
+            statement_keywords = ["balance sheet", "profit and loss", "cash flow", "income statement", "p&l", "p & l"]
+            if any(keyword in user_query.lower() for keyword in statement_keywords):
+                metadata_filters["is_statement"] = "yes"
+                # Don't set is_note for statement keywords
+                log.info(f"Added is_statement=yes filter for statement keywords in query")
+            
+            # Handle explicit note requests - but don't override statement requests
+            if "note" in user_query.lower():
+                # If this is ONLY a note request (no statement keywords), make it a note query
+                if not any(keyword in user_query.lower() for keyword in statement_keywords):
+                    metadata_filters["is_statement"] = "no"
+                    metadata_filters["is_note"] = "yes"
+                    log.info("Added is_note=yes filter for note-only request")
+                # If it's a combined statement + notes request, this query stays as statement
+                # (We'll add note queries separately later)
+            
+            if not search_query:
+                # Create a fallback search query using available information
+                ticker = metadata_filters.get("ticker", "")
+                statement_type = metadata_filters.get("statement_type", "").replace("_", " ")
+                
+                if ticker or statement_type:
+                    fallback_query = f"{ticker} {statement_type} {user_query}".strip()
+                    query_spec["search_query"] = fallback_query
+                    log.info(f"Generated fallback search query: '{fallback_query}'")
+                else:
+                    # If we can't create a meaningful query, use the original user query
+                    query_spec["search_query"] = user_query
+                    log.info(f"Using original query as fallback: '{user_query}'")
+            
+            # CRITICAL VALIDATION: Ensure mutual exclusivity between is_statement and is_note
+            if metadata_filters.get("is_statement") == "yes" and metadata_filters.get("is_note") == "yes":
+                log.error(f"❌ MUTUAL EXCLUSIVITY VIOLATION: Both is_statement and is_note are 'yes' - fixing...")
+                
+                # Determine which one should be kept based on query content
+                if "note" in user_query.lower() and not any(keyword in user_query.lower() for keyword in ["balance sheet", "profit and loss", "cash flow", "income statement", "p&l", "p & l"]):
+                    # Pure note request
+                    metadata_filters["is_statement"] = "no"
+                    metadata_filters["is_note"] = "yes"
+                    log.info("Fixed to note-only query: is_statement=no, is_note=yes")
+                else:
+                    # Statement request (possibly with notes to be handled separately)
+                    metadata_filters["is_statement"] = "yes"
+                    metadata_filters["is_note"] = "no"
+                    log.info("Fixed to statement query: is_statement=yes, is_note=no")
+            
+            # CRITICAL VALIDATION: Ensure note_link is only present when is_note="yes" 
+            if metadata_filters.get("is_statement") == "yes" and "note_link" in metadata_filters:
+                log.warning(f"⚠️ Removing note_link from statement query - note_link should only exist for notes")
+                del metadata_filters["note_link"]
+            
+            # Update the query spec with validated metadata filters
+            query_spec["metadata_filters"] = metadata_filters
+            valid_queries.append(query_spec)
+        
+        # Update the query plan with validated queries
+        query_plan.queries = valid_queries
+        
+        # Handle combined statement + notes requests
+        # If user asked for notes AND we have statement queries, add corresponding note queries
+        user_query_lower = user_query.lower()
+        if "note" in user_query_lower and any("is_statement" in q.get("metadata_filters", {}) and 
+                                             q["metadata_filters"]["is_statement"] == "yes" 
+                                             for q in valid_queries):
+            
+            log.info("🗒️ Combined statement + notes request detected - adding note queries")
+            statement_keywords = ["balance sheet", "profit and loss", "cash flow", "income statement", "p&l", "p & l"]
+            
+            # Find statement queries and create corresponding note queries
+            additional_note_queries = []
+            for query_spec in valid_queries:
+                metadata_filters = query_spec.get("metadata_filters", {})
+                if metadata_filters.get("is_statement") == "yes":
+                    # Create corresponding note query
+                    note_query = {
+                        "search_query": query_spec["search_query"].replace("account", "notes").replace("statement", "notes"),
+                        "metadata_filters": {
+                            **{k: v for k, v in metadata_filters.items() 
+                               if k not in ["is_statement", "is_note", "statement_type"]},
+                            "is_statement": "no",
+                            "is_note": "yes"
+                        }
+                    }
+                    
+                    # Set note_link based on statement_type
+                    if "statement_type" in metadata_filters:
+                        note_query["metadata_filters"]["note_link"] = metadata_filters["statement_type"]
+                    else:
+                        # Try to infer from search query
+                        search_lower = query_spec["search_query"].lower()
+                        if any(kw in search_lower for kw in ["profit and loss", "p&l", "p & l"]):
+                            note_query["metadata_filters"]["note_link"] = "profit_and_loss"
+                        elif "balance sheet" in search_lower:
+                            note_query["metadata_filters"]["note_link"] = "balance_sheet"
+                        elif "cash flow" in search_lower:
+                            note_query["metadata_filters"]["note_link"] = "cash_flow"
+                    
+                    additional_note_queries.append(note_query)
+                    log.info(f"📝 Added note query for {metadata_filters.get('ticker', 'company')}: note_link={note_query['metadata_filters'].get('note_link')}")
+            
+            # Add note queries to the plan
+            query_plan.queries.extend(additional_note_queries)
+            log.info(f"🎯 Enhanced plan: {len(query_plan.queries)} total queries ({len(valid_queries)} statements + {len(additional_note_queries)} notes)")
+        
+        log.info(f"Gemini parsing successful - Companies: {query_plan.companies}, Intent: {query_plan.intent}, Confidence: {query_plan.confidence}, Queries: {len(query_plan.queries)}")
+        return query_plan
             
     except Exception as e:
-        log.error(f"Claude parsing failed: {e}")
-        # Return a clarification request instead of failing
+        log.error(f"Gemini parsing failed: {e}")
+        
+        # Simple fallback: create a basic query plan from the user query
+        log.info("🔄 Attempting fallback query parsing...")
+        
+        try:
+            # Simple pattern matching for common requests
+            fallback_companies = []
+            fallback_intent = "analysis"
+            
+            # Look for company tickers in the query
+            query_upper = user_query.upper()
+            for ticker_data in TICKERS:
+                ticker = ticker_data["Symbol"].upper()
+                if ticker in query_upper:
+                    fallback_companies.append(ticker)
+            
+            # If no companies found in current query, check conversation context
+            if not fallback_companies and conversation_context:
+                context_messages = conversation_context.get_context()
+                for msg in context_messages[-3:]:  # Check last 3 messages
+                    msg_content = msg.get("content", "").upper()
+                    for ticker_data in TICKERS:
+                        ticker = ticker_data["Symbol"].upper()
+                        if ticker in msg_content:
+                            fallback_companies.append(ticker)
+                            break
+                    if fallback_companies:
+                        break
+            
+            # Determine intent from keywords
+            if any(stmt_term in user_query.lower() for stmt_term in ["statement", "balance sheet", "profit and loss", "cash flow", "income statement", "p&l"]):
+                fallback_intent = "statement"
+            
+            # Create a basic query if we found companies
+            if fallback_companies:
+                fallback_queries = []
+                for company in fallback_companies:
+                    fallback_queries.append({
+                        "search_query": f"{company} {user_query}",
+                        "metadata_filters": {
+                            "ticker": company,
+                            "is_statement": "yes" if fallback_intent == "statement" else "no"
+                        }
+                    })
+                
+                return QueryPlan(
+                    companies=fallback_companies,
+                    intent=fallback_intent,
+                    queries=fallback_queries,
+                    confidence=0.3,  # Low confidence for fallback
+                    needs_clarification=False
+                )
+        
+        except Exception as fallback_error:
+            log.error(f"Fallback parsing also failed: {fallback_error}")
+        
+        # Last resort: return empty query plan
         return QueryPlan(
             companies=[],
             intent="analysis",
             queries=[],
-            confidence=0.0,
+            confidence=0.1,
             needs_clarification=True,
-            clarification=f"I couldn't understand your query. Please specify the company name, time period, and statement type. Example: 'HBL 2024 annual balance sheet'"
+            clarification="I couldn't understand your query. Please specify the company name, time period, and statement type. Example: 'HBL 2024 annual balance sheet'"
         )
 
 async def call_mcp_server(tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -662,7 +744,7 @@ async def execute_financial_query(query_plan: QueryPlan, original_query: str) ->
                 result = await call_mcp_server("psx_search_financial_data", {
                     "search_query": current_search_query,
                     "metadata_filters": metadata_filters,
-                    "top_k": query_spec.get("top_k", 10)
+                    "top_k": query_spec.get('top_k', 10)
                 })
                 
                 # Error handling for server responses
@@ -901,11 +983,11 @@ async def on_message(message: cl.Message):
         # Load conversation context
         conversation_context = get_conversation_context()
         
-        # Step 1: Parse query with Claude
-        step1 = cl.Message(content="🧠 **Step 1:** Analyzing your query...")
+        # Step 1: Parse query with Gemini
+        step1 = cl.Message(content="🧠 **Step 1:** Analyzing your query with Gemini...")
         await step1.send()
         
-        query_plan = await parse_query_with_claude(message.content, conversation_context)
+        query_plan = await parse_query_with_gemini(message.content, conversation_context)
         
         # Handle clarification needs
         if query_plan.needs_clarification:
