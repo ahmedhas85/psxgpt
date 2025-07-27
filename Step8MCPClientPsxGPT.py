@@ -867,10 +867,21 @@ def auth_callback(username: str, password: str) -> Optional[cl.User]:
 
 @cl.on_chat_start
 async def welcome_message():
+    # Detect environment
+    is_codespaces = os.getenv("CODESPACES") == "true"
+    
+    if is_codespaces:
+        server_url = "Replace with your Codespaces URL (see server logs)"
+        env_note = "**GitHub Codespaces Detected** 🐙\n\nCheck your server terminal for the actual URL (will look like `https://your-codespace-8001.preview.app.github.dev/sse`)\n\n"
+    else:
+        server_url = "http://127.0.0.1:8001/sse"
+        env_note = "**Local Development Environment** 💻\n\n"
+    
     await cl.Message(
         content=(
             "👋 **Welcome to BankGPT!**\n\n"
-            "To get started, first copy this URL: `https://bankgptserver.onrender.com/sse`\n\n"
+            f"{env_note}"
+            f"To get started, copy this URL: `{server_url}`\n\n"
             "1. Click the plug icon 🔌 in the chatbox (MCP Servers)\n"
             "2. Under **Type*** click the dropdown and select **sse**\n"
             "3. Paste the URL above and set **Name** as **BankGPT**\n"
