@@ -431,7 +431,7 @@ if __name__ == "__main__":
     
     if is_codespaces:
         codespace_name = os.getenv("CODESPACE_NAME", "unknown")
-        codespace_url = f"https://{codespace_name}-{port}.preview.app.github.dev/sse"
+        codespace_url = f"https://{codespace_name}-{port}.app.github.dev/sse"
         log.info(f"🔗 Codespaces URL: {codespace_url}")
         log.info(f"🎯 Copy this URL for your client: {codespace_url}")
     else:

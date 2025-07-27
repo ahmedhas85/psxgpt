@@ -9,7 +9,6 @@
 -- Drop all existing tables (if they exist)
 DROP TABLE IF EXISTS "Element";
 DROP TABLE IF EXISTS "Feedback";
-DROP TABLE IF EXISTS "Message";
 DROP TABLE IF EXISTS "Step";
 DROP TABLE IF EXISTS "Thread";
 DROP TABLE IF EXISTS "User";
