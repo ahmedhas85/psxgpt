@@ -423,8 +423,20 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 8001))
     
     # Detect environment and set appropriate host
-    # In Codespaces, CODESPACES env var is set to 'true'
     is_codespaces = os.getenv("CODESPACES") == "true"
+    
+    # Auto-make port public in Codespaces
+    if is_codespaces:
+        try:
+            import subprocess
+            result = subprocess.run(["gh", "codespace", "ports", "visibility", f"{port}:public"], 
+                                  capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                log.info(f"✅ Port {port} set to public automatically")
+            else:
+                log.warning(f"⚠️ Could not auto-set port to public: {result.stderr}")
+        except Exception as e:
+            log.warning(f"⚠️ Could not auto-set port to public: {e}")
     host = "0.0.0.0" if is_codespaces else "127.0.0.1"
     
     log.info(f"🌐 Environment: {'GitHub Codespaces' if is_codespaces else 'Local'}")
